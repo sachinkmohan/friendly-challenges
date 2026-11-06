@@ -72,7 +72,6 @@ LANGUAGE plpgsql AS $$
 DECLARE
   active_count integer;
 BEGIN
-  -- Lock this group so two starts cannot both pass the floor.
   PERFORM 1 FROM groups WHERE id = NEW.group_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'group_missing' USING ERRCODE = 'P0001';
@@ -127,12 +126,11 @@ CREATE TRIGGER challenges_reject_frozen_terms
   FOR EACH ROW
   EXECUTE FUNCTION challenges_reject_frozen_terms();
 
-CREATE OR REPLACE FUNCTION logging_rhythms_guard() RETURNS trigger
+CREATE OR REPLACE FUNCTION logging_rhythms_share_challenge() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE
   terms challenges%ROWTYPE;
 BEGIN
-  -- Share lock lets two rhythm writes commit, and makes a start wait.
   SELECT * INTO terms FROM challenges WHERE group_id = NEW.group_id FOR SHARE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'no_challenge' USING ERRCODE = 'P0001';
@@ -150,7 +148,9 @@ END;
 $$;
 
 DROP TRIGGER IF EXISTS logging_rhythms_guard ON logging_rhythms;
-CREATE TRIGGER logging_rhythms_guard
+DROP FUNCTION IF EXISTS logging_rhythms_guard();
+DROP TRIGGER IF EXISTS logging_rhythms_share_challenge ON logging_rhythms;
+CREATE TRIGGER logging_rhythms_share_challenge
   BEFORE INSERT OR UPDATE ON logging_rhythms
   FOR EACH ROW
-  EXECUTE FUNCTION logging_rhythms_guard();
+  EXECUTE FUNCTION logging_rhythms_share_challenge();
