@@ -154,6 +154,7 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
     ul.groups li, ul.members li {
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 12px;
       min-height: 48px;
     }
@@ -167,7 +168,9 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
       text-decoration: none;
     }
     .count { color: #5c564c; }
-    .members time { color: #5c564c; }
+    .members time, .rhythm { color: #5c564c; }
+    .member-name { flex: 1; min-width: 0; }
+    .rhythm { flex-basis: 100%; padding-left: 68px; }
     .share { margin-top: 16px; overflow-wrap: anywhere; }
     .share a {
       display: flex;
@@ -505,7 +508,7 @@ function typeLabel(type: ChallengeType): string {
 }
 
 function headcountSentence(floor: number, cap: number): string {
-  return `A challenge can start later when ${floor} to ${cap} people are active.`
+  return `A challenge can start when ${floor} to ${cap} people are active.`
 }
 
 function failureParagraph(attempt?: ChallengeAttempt): string {
@@ -620,7 +623,7 @@ function rhythmControl(
   userId: string,
   posted: RhythmInput | undefined,
 ): string {
-  if (challenge.phase === 'unopened') return rhythmForm(groupId, posted?.interval ?? '', posted?.anchorOn ?? '')
+  if (challenge.phase === 'unopened') return ''
   const slot = rhythmSlot(challenge.phase, challenge.rhythms, userId)
   if (slot.mode === 'locked') return rhythmText(slot.rhythm)
   const stored = slot.mode === 'open' ? slot.rhythm : null
@@ -637,8 +640,10 @@ function memberItem(member: MemberLine, rhythms: readonly RhythmLine[]): string 
   const when = escapeHtml(member.joinedOn)
   const rhythm = rhythms.find((line) => line.userId === member.userId)
   const anchor = rhythm ? escapeHtml(rhythm.anchorOn) : ''
-  const logged = rhythm ? ` ${escapeHtml(RHYTHM_LABELS[rhythm.kind])} <time datetime="${anchor}">${anchor}</time>` : ''
-  return `<li>${portrait(member)} ${escapeHtml(member.displayName)} <time datetime="${when}">${when}</time>${logged}</li>`
+  const logged = rhythm
+    ? `<span class="rhythm">${escapeHtml(RHYTHM_LABELS[rhythm.kind])} <time datetime="${anchor}">${anchor}</time></span>`
+    : ''
+  return `<li>${portrait(member)} <span class="member-name">${escapeHtml(member.displayName)} <time datetime="${when}">${when}</time></span>${logged}</li>`
 }
 
 function joinControl(groupId: GroupId, viewer: Viewer): string {

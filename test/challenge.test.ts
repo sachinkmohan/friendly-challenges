@@ -574,7 +574,7 @@ test('the group card saves the stake, starts at three members, and then freezes'
     assert.match(memberHtml, /value="KWD"/)
     assert.doesNotMatch(memberHtml, /value="XYZ"/)
     assert.match(memberHtml, /name="stake"/)
-    assert.match(memberHtml, /A challenge can start later when 3 to 5 people are active/)
+    assert.match(memberHtml, /A challenge can start when 3 to 5 people are active/)
     assert.doesNotMatch(memberHtml, /challenge\/start/)
     assert.match(memberHtml, /class="screen is-current"/)
     assert.doesNotMatch(memberHtml, /<section[^>]*\sid=/)
