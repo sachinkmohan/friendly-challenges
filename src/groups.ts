@@ -21,6 +21,7 @@ export type JoinResult =
   | { ok: false; failure: 'group_missing' | 'group_full' }
 
 export type MemberLine = {
+  userId: string
   displayName: string
   avatarUrl: string | null
   joinedOn: string
@@ -113,10 +114,12 @@ function flagFrom(value: unknown): boolean {
 function parseMember(value: unknown): MemberLine {
   if (typeof value !== 'object' || value === null) throw new Error('member')
   const row = value as Record<string, unknown>
+  if (typeof row.userId !== 'string' || row.userId === '') throw new Error('member id')
   if (typeof row.displayName !== 'string') throw new Error('member name')
   if (typeof row.joinedOn !== 'string' || !JOINED_ON.test(row.joinedOn)) throw new Error('member date')
   if (row.avatarUrl !== null && typeof row.avatarUrl !== 'string') throw new Error('member avatar')
   return {
+    userId: row.userId,
     displayName: row.displayName,
     avatarUrl: row.avatarUrl,
     joinedOn: row.joinedOn,
@@ -195,6 +198,7 @@ export async function viewGroup(
             CASE WHEN bool_or(a.user_id = $2::uuid) THEN
               json_agg(
                 json_build_object(
+                  'userId', a.user_id::text,
                   'displayName', u.display_name,
                   'joinedOn', to_char(a.joined_on, 'YYYY-MM-DD'),
                   'avatarUrl', u.avatar_url

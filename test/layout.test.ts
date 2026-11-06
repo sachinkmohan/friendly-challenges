@@ -20,7 +20,7 @@ test('every page is the same phone shell', () => {
     renderNewGroup({ state: 'signed_out' }),
     renderNewGroup({ state: 'signed_in', account }),
     renderGroup(
-      { kind: 'preview', groupId, name: 'Morning run', activeCount: 1 },
+      { kind: 'preview', groupId, name: 'Morning run', activeCount: 1, headline: null },
       { state: 'signed_out' },
       'http://127.0.0.1:3000',
     ),

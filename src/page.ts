@@ -1,3 +1,19 @@
+import {
+  challengeFailureCopy,
+  formatStake,
+  PRESET_LABELS,
+  RHYTHM_LABELS,
+  rhythmSlot,
+  type ChallengeFailure,
+  type ChallengeHeadline,
+  type ChallengeInput,
+  type ChallengeTerms,
+  type ChallengeType,
+  type MemberChallengeCard,
+  type Rhythm,
+  type RhythmInput,
+  type RhythmLine,
+} from './challenge.ts'
 import { parseGroupId, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
 import { authFailureCopy, type Account, type AuthFailure, type Viewer } from './identity.ts'
 
@@ -118,7 +134,7 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
       margin-top: 16px;
       font-weight: 650;
     }
-    input {
+    input, select {
       display: block;
       width: 100%;
       min-height: 48px;
@@ -291,6 +307,9 @@ function portrait(person: { displayName: string; avatarUrl: string | null }): st
 
 const groupsRoot = '/groups'
 const joinSuffix = '/join'
+const challengeStartSuffix = '/challenge/start'
+const challengeSuffix = '/challenge'
+const rhythmSuffix = '/rhythm'
 
 export type HomePage =
   | { state: 'signed_out' }
@@ -301,6 +320,9 @@ export type GroupRoute =
   | { kind: 'create' }
   | { kind: 'show'; groupId: GroupId }
   | { kind: 'join'; groupId: GroupId }
+  | { kind: 'save_challenge'; groupId: GroupId }
+  | { kind: 'start_challenge'; groupId: GroupId }
+  | { kind: 'save_rhythm'; groupId: GroupId }
 
 export function groupHref(groupId: GroupId): string {
   return `${groupsRoot}/${groupId}`
@@ -314,17 +336,30 @@ function googleReturnHref(returnPath: string): string {
   return `/auth/google?return=${encodeURIComponent(returnPath)}`
 }
 
+function routeSuffix(
+  rest: string,
+  suffix: string,
+  kind: 'start_challenge' | 'save_challenge' | 'save_rhythm' | 'join',
+): GroupRoute | null {
+  if (!rest.endsWith(suffix) || rest.length <= suffix.length) return null
+  const idPart = rest.slice(0, -suffix.length)
+  if (idPart.includes('/')) return null
+  const groupId = parseGroupId(idPart)
+  if (!groupId) return null
+  return { kind, groupId }
+}
+
 export function matchGroupPath(path: string): GroupRoute | null {
   if (path === `${groupsRoot}/new`) return { kind: 'new' }
   if (path === groupsRoot) return { kind: 'create' }
   if (!path.startsWith(`${groupsRoot}/`)) return null
   const rest = path.slice(groupsRoot.length + 1)
-  if (rest.endsWith(joinSuffix) && rest.length > joinSuffix.length) {
-    const idPart = rest.slice(0, -joinSuffix.length)
-    if (idPart.includes('/')) return null
-    const groupId = parseGroupId(idPart)
-    return groupId ? { kind: 'join', groupId } : null
-  }
+  const suffixed =
+    routeSuffix(rest, challengeStartSuffix, 'start_challenge') ??
+    routeSuffix(rest, challengeSuffix, 'save_challenge') ??
+    routeSuffix(rest, rhythmSuffix, 'save_rhythm') ??
+    routeSuffix(rest, joinSuffix, 'join')
+  if (suffixed) return suffixed
   if (rest.includes('/')) return null
   const groupId = parseGroupId(rest)
   return groupId ? { kind: 'show', groupId } : null
@@ -439,9 +474,171 @@ export function renderNewGroup(viewer: Viewer, error?: 'name_empty' | 'name_too_
   `)
 }
 
-function memberItem(member: MemberLine): string {
+type TermValues = {
+  name: string
+  type: string
+  customLabel: string
+  currency: string
+  stake: string
+  startsOn: string
+  endsOn: string
+}
+
+type ChallengeAttempt = {
+  failure?: ChallengeFailure
+  draft?: ChallengeInput
+  rhythmDraft?: RhythmInput
+}
+
+const emptyTerms: TermValues = {
+  name: '',
+  type: '',
+  customLabel: '',
+  currency: '',
+  stake: '',
+  startsOn: '',
+  endsOn: '',
+}
+
+function typeLabel(type: ChallengeType): string {
+  return type.kind === 'custom' ? type.label : PRESET_LABELS[type.preset]
+}
+
+function headcountSentence(floor: number, cap: number): string {
+  return `A challenge can start later when ${floor} to ${cap} people are active.`
+}
+
+function failureParagraph(attempt?: ChallengeAttempt): string {
+  if (!attempt?.failure) return ''
+  return `<p>${escapeHtml(challengeFailureCopy[attempt.failure])}</p>`
+}
+
+function optionList(items: readonly { value: string; label: string }[], selected: string): string {
+  return items
+    .map((item) => {
+      const current = item.value === selected ? ' selected' : ''
+      return `<option value="${escapeHtml(item.value)}"${current}>${escapeHtml(item.label)}</option>`
+    })
+    .join('')
+}
+
+function typeOptions(selected: string): string {
+  const items = [
+    ...Object.entries(PRESET_LABELS).map(([value, label]) => ({ value, label })),
+    { value: 'custom', label: 'Custom' },
+  ]
+  return optionList(items, selected)
+}
+
+function currencyOptions(currencies: readonly string[], selected: string): string {
+  return optionList(
+    currencies.map((code) => ({ value: code, label: code })),
+    selected,
+  )
+}
+
+function intervalOptions(selected: string): string {
+  return optionList(
+    Object.entries(RHYTHM_LABELS).map(([value, label]) => ({ value, label })),
+    selected,
+  )
+}
+
+function termsFromStored(terms: ChallengeTerms, minorDigits: number): TermValues {
+  return {
+    name: terms.name,
+    type: terms.type.kind === 'custom' ? 'custom' : terms.type.preset,
+    customLabel: terms.type.kind === 'custom' ? terms.type.label : '',
+    currency: terms.currency,
+    stake: formatStake(terms.stakeMinor, minorDigits),
+    startsOn: terms.startsOn,
+    endsOn: terms.endsOn,
+  }
+}
+
+function termsFromDraft(draft: ChallengeInput): TermValues {
+  return {
+    name: draft.name,
+    type: draft.type,
+    customLabel: draft.customLabel,
+    currency: draft.currency,
+    stake: draft.stake,
+    startsOn: draft.startsOn,
+    endsOn: draft.endsOn,
+  }
+}
+
+function termsText(terms: ChallengeTerms, minorDigits: number): string {
+  const start = escapeHtml(terms.startsOn)
+  const end = escapeHtml(terms.endsOn)
+  return `<p>${escapeHtml(terms.name)}</p>
+    <p>${escapeHtml(typeLabel(terms.type))}</p>
+    <p><time datetime="${start}">${start}</time> to <time datetime="${end}">${end}</time></p>
+    <p>${escapeHtml(formatStake(terms.stakeMinor, minorDigits))} ${escapeHtml(terms.currency)}</p>`
+}
+
+function termsForm(groupId: GroupId, currencies: readonly string[], values: TermValues): string {
+  const action = escapeHtml(`${groupHref(groupId)}/challenge`)
+  return `<form method="post" action="${action}">
+      <label for="challenge-name">Challenge name</label>
+      <input id="challenge-name" name="name" value="${escapeHtml(values.name)}" autocomplete="off">
+      <label for="challenge-type">Type</label>
+      <select id="challenge-type" name="type">${typeOptions(values.type)}</select>
+      <label for="challenge-custom">Custom type</label>
+      <input id="challenge-custom" name="custom_label" value="${escapeHtml(values.customLabel)}" autocomplete="off">
+      <label for="challenge-currency">Currency</label>
+      <select id="challenge-currency" name="currency">${currencyOptions(currencies, values.currency)}</select>
+      <label for="challenge-stake">Stake per day</label>
+      <input id="challenge-stake" name="stake" value="${escapeHtml(values.stake)}" inputmode="decimal" autocomplete="off">
+      <label for="challenge-start">Start date</label>
+      <input id="challenge-start" name="starts_on" type="date" value="${escapeHtml(values.startsOn)}">
+      <label for="challenge-end">End date</label>
+      <input id="challenge-end" name="ends_on" type="date" value="${escapeHtml(values.endsOn)}">
+      <button type="submit">Save challenge</button>
+    </form>`
+}
+
+function rhythmText(rhythm: Rhythm): string {
+  const when = escapeHtml(rhythm.anchorOn)
+  return `<p>${escapeHtml(RHYTHM_LABELS[rhythm.kind])} <time datetime="${when}">${when}</time></p>`
+}
+
+function rhythmForm(groupId: GroupId, interval: string, anchor: string): string {
+  const action = escapeHtml(`${groupHref(groupId)}/rhythm`)
+  return `<form method="post" action="${action}">
+      <label for="rhythm-interval">How often you log</label>
+      <select id="rhythm-interval" name="interval">${intervalOptions(interval)}</select>
+      <label for="rhythm-anchor">Anchor date</label>
+      <input id="rhythm-anchor" name="anchor_on" type="date" value="${escapeHtml(anchor)}">
+      <button type="submit">Save rhythm</button>
+    </form>`
+}
+
+function rhythmControl(
+  groupId: GroupId,
+  challenge: MemberChallengeCard,
+  userId: string,
+  posted: RhythmInput | undefined,
+): string {
+  if (challenge.phase === 'unopened') return rhythmForm(groupId, posted?.interval ?? '', posted?.anchorOn ?? '')
+  const slot = rhythmSlot(challenge.phase, challenge.rhythms, userId)
+  if (slot.mode === 'locked') return rhythmText(slot.rhythm)
+  const stored = slot.mode === 'open' ? slot.rhythm : null
+  return rhythmForm(groupId, posted?.interval ?? stored?.kind ?? '', posted?.anchorOn ?? stored?.anchorOn ?? '')
+}
+
+function startForm(groupId: GroupId, activeCount: number, floor: number, cap: number): string {
+  if (activeCount < floor || activeCount > cap) return ''
+  const action = escapeHtml(`${groupHref(groupId)}/challenge/start`)
+  return `<form method="post" action="${action}"><button type="submit">Start challenge</button></form>`
+}
+
+function memberItem(member: MemberLine, rhythms: readonly RhythmLine[]): string {
   const when = escapeHtml(member.joinedOn)
-  return `<li>${portrait(member)} ${escapeHtml(member.displayName)} <time datetime="${when}">${when}</time></li>`
+  const rhythm = rhythms.find((line) => line.userId === member.userId)
+  const anchor = rhythm ? escapeHtml(rhythm.anchorOn) : ''
+  const logged = rhythm ? ` ${escapeHtml(RHYTHM_LABELS[rhythm.kind])} <time datetime="${anchor}">${anchor}</time>` : ''
+  return `<li>${portrait(member)} ${escapeHtml(member.displayName)} <time datetime="${when}">${when}</time>${logged}</li>`
 }
 
 function joinControl(groupId: GroupId, viewer: Viewer): string {
@@ -453,25 +650,58 @@ function joinControl(groupId: GroupId, viewer: Viewer): string {
   return `<form method="post" action="${action}"><button type="submit">Join group</button></form>`
 }
 
+function headlineText(headline: ChallengeHeadline | null): string {
+  if (!headline) return ''
+  return termsText(headline.terms, headline.minorDigits)
+}
+
 export function renderGroup(
-  view: Exclude<GroupView, { kind: 'missing' }>,
+  view:
+    | (Extract<GroupView, { kind: 'preview' | 'full' }> & { readonly headline: ChallengeHeadline | null })
+    | (Extract<GroupView, { kind: 'members' }> & { readonly challenge: MemberChallengeCard }),
   viewer: Viewer,
   origin: string,
+  attempt?: ChallengeAttempt,
 ): string {
   const title = `<h2>${escapeHtml(view.name)}</h2>`
   const count = `<p class="count">${activeCountText(view.activeCount)}</p>`
+  const failure = failureParagraph(attempt)
   if (view.kind === 'full') {
-    return groupCard(`${title}${count}<p>This group is full.</p>`)
+    return groupCard(`${title}${count}${failure}${headlineText(view.headline)}<p>This group is full.</p>`)
   }
   if (view.kind === 'preview') {
-    return groupCard(`${title}${count}${joinControl(view.groupId, viewer)}`)
+    return groupCard(`${title}${count}${failure}${headlineText(view.headline)}${joinControl(view.groupId, viewer)}`)
   }
+  const challenge = view.challenge
+  const range =
+    challenge.phase === 'active' ? '' : `<p>${escapeHtml(headcountSentence(challenge.floor, challenge.cap))}</p>`
+  const terms =
+    challenge.phase === 'active'
+      ? termsText(challenge.terms, challenge.minorDigits)
+      : termsForm(
+          view.groupId,
+          challenge.currencies,
+          attempt?.draft
+            ? termsFromDraft(attempt.draft)
+            : challenge.phase === 'draft'
+              ? termsFromStored(challenge.terms, challenge.minorDigits)
+              : emptyTerms,
+        )
+  const start =
+    challenge.phase === 'draft' ? startForm(view.groupId, view.activeCount, challenge.floor, challenge.cap) : ''
+  const userId = viewer.state === 'signed_in' ? viewer.account.id : ''
+  const rhythm = rhythmControl(view.groupId, challenge, userId, attempt?.rhythmDraft)
+  const rhythms = challenge.phase === 'unopened' ? [] : challenge.rhythms
   const share = escapeHtml(`${origin}${groupHref(view.groupId)}`)
   return groupCard(`
     ${title}
     ${count}
-    <p>A challenge can start later when 3 to 5 people are active.</p>
-    <ul class="members">${view.members.map(memberItem).join('')}</ul>
+    ${failure}
+    ${range}
+    ${terms}
+    ${start}
+    ${rhythm}
+    <ul class="members">${view.members.map((member) => memberItem(member, rhythms)).join('')}</ul>
     <p class="share">Share this link to invite someone. <a href="${share}">${share}</a></p>
   `)
 }

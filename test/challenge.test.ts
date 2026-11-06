@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { createServer, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { test } from 'node:test'
 import { upsertAccount } from '../src/accounts.ts'
+import { createApp } from '../src/app.ts'
 import {
   formatStake,
   memberIsDue,
@@ -20,6 +23,8 @@ import {
 import { openDatabase } from '../src/db.ts'
 import { createGroup, joinGroup, parseGroupId, type GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
+import { safeReturnPath } from '../src/page.ts'
+import { createSession } from '../src/sessions.ts'
 import type { PGlite } from '@electric-sql/pglite'
 
 function day(value: string) {
@@ -451,6 +456,239 @@ test('started terms and a stored rhythm stay put unless the write is equal', asy
     assert.equal(phase.rows[0]?.phase, 'active')
   } finally {
     await db.close()
+  }
+})
+
+test('a challenge path is not a sign-in return path', () => {
+  const id = '00000000-0000-4000-8000-000000000001'
+  assert.equal(safeReturnPath(`/groups/${id}`), `/groups/${id}`)
+  assert.equal(safeReturnPath('/groups/new'), '/groups/new')
+  assert.equal(safeReturnPath(`/groups/${id}/challenge`), '/')
+  assert.equal(safeReturnPath(`/groups/${id}/challenge/start`), '/')
+  assert.equal(safeReturnPath(`/groups/${id}/rhythm`), '/')
+  assert.equal(safeReturnPath(`/groups/${id}/join`), '/')
+})
+
+async function listen(db: PGlite) {
+  const app = createApp({ db, config: { clientId: 'client-id', clientSecret: 'client-secret' } })
+  const server = createServer((req, res) => {
+    void app(req, res)
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address() as AddressInfo
+  return { server, base: `http://127.0.0.1:${address.port}` }
+}
+
+async function closeServer(server: Server, db: PGlite) {
+  await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+  await db.close()
+}
+
+async function cookieFor(db: PGlite, account: Account): Promise<string> {
+  const token = await createSession(db, account.id)
+  return `session=${encodeURIComponent(token)}`
+}
+
+function form(fields: Record<string, string>): string {
+  return new URLSearchParams(fields).toString()
+}
+
+function challengeForm(overrides: Record<string, string> = {}): string {
+  return form({
+    name: 'No sweets',
+    type: 'coding',
+    custom_label: 'Nope',
+    currency: 'USD',
+    stake: '5',
+    starts_on: '2026-11-01',
+    ends_on: '2026-11-30',
+    ...overrides,
+  })
+}
+
+async function post(base: string, path: string, cookie: string | null, body?: string) {
+  return fetch(`${base}${path}`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: {
+      ...(cookie ? { cookie } : {}),
+      ...(body === undefined ? {} : { 'content-type': 'application/x-www-form-urlencoded' }),
+    },
+    body,
+  })
+}
+
+test('the group card saves the stake, starts at three members, and then freezes', async () => {
+  const db = await openDatabase()
+  const ada = await person(db, 'Ada')
+  const grace = await person(db, 'Grace')
+  const lin = await person(db, 'Lin')
+  const noor = await person(db, 'Noor')
+  const owen = await person(db, 'Owen')
+  const bea = await person(db, 'Bea')
+  const adaCookie = await cookieFor(db, ada)
+  const graceCookie = await cookieFor(db, grace)
+  const linCookie = await cookieFor(db, lin)
+  const beaCookie = await cookieFor(db, bea)
+  const { server, base } = await listen(db)
+  try {
+    const created = await post(base, '/groups', adaCookie, 'name=Morning+run')
+    assert.equal(created.status, 303)
+    const groupPath = created.headers.get('location')
+    assert.ok(groupPath)
+    const before = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM challenges`)
+    assert.equal(Number(before.rows[0]?.n), 0)
+
+    for (const path of [`${groupPath}/challenge`, `${groupPath}/challenge/start`, `${groupPath}/rhythm`]) {
+      const looked = await fetch(`${base}${path}`)
+      assert.equal(looked.status, 405)
+      assert.equal(looked.headers.get('allow'), 'POST')
+      assert.equal(await looked.text(), '')
+    }
+    const postShow = await post(base, groupPath, adaCookie)
+    assert.equal(postShow.status, 405)
+    assert.equal(postShow.headers.get('allow'), 'GET')
+
+    const signedOut = await post(base, `${groupPath}/challenge`, null, challengeForm())
+    assert.equal(signedOut.status, 401)
+    const stillNone = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM challenges`)
+    assert.equal(Number(stillNone.rows[0]?.n), 0)
+
+    const saved = await post(base, `${groupPath}/challenge`, adaCookie, challengeForm())
+    assert.equal(saved.status, 303)
+    assert.equal(saved.headers.get('location'), groupPath)
+    const row = await db.query<{ stake_minor: number; currency: string; type_kind: string; custom_label: string | null }>(
+      `SELECT stake_minor, btrim(currency) AS currency, type_kind, custom_label FROM challenges WHERE group_id = $1`,
+      [groupPath.slice('/groups/'.length)],
+    )
+    assert.equal(Number(row.rows[0]?.stake_minor), 500)
+    assert.equal(row.rows[0]?.currency, 'USD')
+    assert.equal(row.rows[0]?.type_kind, 'coding')
+    assert.equal(row.rows[0]?.custom_label, null)
+    const memberHtml = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
+    assert.match(memberHtml, /No sweets/)
+    assert.match(memberHtml, /Coding/)
+    assert.match(memberHtml, /value="5\.00"/)
+    assert.match(memberHtml, /value="USD"/)
+    assert.match(memberHtml, /value="JPY"/)
+    assert.match(memberHtml, /value="KWD"/)
+    assert.doesNotMatch(memberHtml, /value="XYZ"/)
+    assert.match(memberHtml, /name="stake"/)
+    assert.match(memberHtml, /A challenge can start later when 3 to 5 people are active/)
+    assert.doesNotMatch(memberHtml, /challenge\/start/)
+    assert.match(memberHtml, /class="screen is-current"/)
+    assert.doesNotMatch(memberHtml, /<section[^>]*\sid=/)
+
+    const preview = await (await fetch(`${base}${groupPath}`, { headers: { cookie: graceCookie } })).text()
+    assert.match(preview, /5\.00 USD/)
+    assert.match(preview, /No sweets/)
+    assert.match(preview, /Coding/)
+    assert.doesNotMatch(preview, /Ada/)
+    assert.match(preview, /Join group/)
+
+    const blank = await post(base, `${groupPath}/challenge`, adaCookie, challengeForm({ name: '', stake: '9.9' }))
+    assert.equal(blank.status, 400)
+    const blankHtml = await blank.text()
+    assert.match(blankHtml, /Type a challenge name/)
+    assert.match(blankHtml, /value="9\.9"/)
+    assert.equal(Number((await db.query<{ stake_minor: number }>(`SELECT stake_minor FROM challenges`)).rows[0]?.stake_minor), 500)
+
+    const again = await post(base, `${groupPath}/challenge`, adaCookie, challengeForm())
+    assert.equal(again.status, 303)
+    const count = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM challenges`)
+    assert.equal(Number(count.rows[0]?.n), 1)
+
+    const jpy = await post(base, `${groupPath}/challenge`, adaCookie, challengeForm({ currency: 'JPY', stake: '5' }))
+    assert.equal(jpy.status, 303)
+    assert.equal(Number((await db.query<{ stake_minor: number }>(`SELECT stake_minor FROM challenges`)).rows[0]?.stake_minor), 5)
+    const unknown = await post(base, `${groupPath}/challenge`, adaCookie, challengeForm({ currency: 'XYZ' }))
+    assert.equal(unknown.status, 400)
+    assert.match(await unknown.text(), /Use a three-letter currency code/)
+    assert.equal(Number((await db.query<{ stake_minor: number }>(`SELECT stake_minor FROM challenges`)).rows[0]?.stake_minor), 5)
+
+    assert.equal((await post(base, `${groupPath}/join`, graceCookie)).status, 303)
+    const tooSmall = await post(base, `${groupPath}/challenge/start`, adaCookie)
+    assert.equal(tooSmall.status, 409)
+    assert.match(await tooSmall.text(), /outside the range on this card/)
+    const phase = await db.query<{ phase: string }>(`SELECT phase FROM challenges`)
+    assert.equal(phase.rows[0]?.phase, 'draft')
+
+    assert.equal((await post(base, `${groupPath}/join`, linCookie)).status, 303)
+    const ready = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
+    assert.match(ready, /action="[^"]+\/challenge\/start"/)
+    const started = await post(base, `${groupPath}/challenge/start`, adaCookie)
+    assert.equal(started.status, 303)
+    const startedAgain = await post(base, `${groupPath}/challenge/start`, graceCookie)
+    assert.equal(startedAgain.status, 303)
+    const activeHtml = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
+    assert.match(activeHtml, /5 JPY/)
+    assert.doesNotMatch(activeHtml, /name="stake"/)
+    assert.doesNotMatch(activeHtml, /challenge\/start/)
+    assert.match(activeHtml, /name="interval"/)
+    const activeRows = await db.query<{ phase: string }>(`SELECT phase FROM challenges`)
+    assert.equal(activeRows.rows.length, 1)
+    assert.equal(activeRows.rows[0]?.phase, 'active')
+
+    const rhythm = await post(
+      base,
+      `${groupPath}/rhythm`,
+      adaCookie,
+      form({ interval: 'every_day', anchor_on: '2026-11-02' }),
+    )
+    assert.equal(rhythm.status, 303)
+    const rhythmHtml = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
+    assert.match(rhythmHtml, /Every day/)
+    assert.match(rhythmHtml, /2026-11-02/)
+    assert.doesNotMatch(rhythmHtml, /name="interval"/)
+    const changedRhythm = await post(
+      base,
+      `${groupPath}/rhythm`,
+      adaCookie,
+      form({ interval: 'every_3_days', anchor_on: '2026-11-02' }),
+    )
+    assert.equal(changedRhythm.status, 409)
+    const changedRhythmHtml = await changedRhythm.text()
+    assert.match(changedRhythmHtml, /This challenge has started, so those fields stay as they are/)
+    assert.match(changedRhythmHtml, /Every day/)
+    assert.doesNotMatch(changedRhythmHtml, /Every 3 days/)
+    const kind = await db.query<{ kind: string }>(`SELECT kind FROM logging_rhythms WHERE user_id = $1`, [ada.id])
+    assert.equal(kind.rows[0]?.kind, 'every_day')
+
+    const renamed = await post(base, `${groupPath}/challenge`, adaCookie, challengeForm({ name: 'Renamed challenge' }))
+    assert.equal(renamed.status, 409)
+    const renamedHtml = await renamed.text()
+    assert.match(renamedHtml, /No sweets/)
+    assert.doesNotMatch(renamedHtml, /Renamed challenge/)
+    const storedName = await db.query<{ name: string }>(`SELECT name FROM challenges`)
+    assert.equal(storedName.rows[0]?.name, 'No sweets')
+
+    const refused = await post(base, `${groupPath}/challenge`, beaCookie, challengeForm())
+    assert.equal(refused.status, 403)
+    const missing = await post(
+      base,
+      '/groups/00000000-0000-4000-8000-000000000099/challenge',
+      adaCookie,
+      challengeForm(),
+    )
+    assert.equal(missing.status, 404)
+
+    assert.equal((await post(base, `${groupPath}/join`, await cookieFor(db, noor))).status, 303)
+    assert.equal((await post(base, `${groupPath}/join`, await cookieFor(db, owen))).status, 303)
+    const full = await fetch(`${base}${groupPath}`, { headers: { cookie: beaCookie } })
+    assert.equal(full.status, 200)
+    const fullHtml = await full.text()
+    assert.match(fullHtml, /This group is full/)
+    assert.match(fullHtml, /5 JPY/)
+    assert.doesNotMatch(fullHtml, /<form/)
+    assert.doesNotMatch(fullHtml, /Ada/)
+    const sixth = await post(base, `${groupPath}/join`, beaCookie)
+    assert.equal(sixth.status, 409)
+    const activeMembers = await db.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM memberships WHERE left_on IS NULL`,
+    )
+    assert.equal(Number(activeMembers.rows[0]?.n), 5)
+  } finally {
+    await closeServer(server, db)
   }
 })
 
