@@ -1,3 +1,4 @@
+import { parseGroupId, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
 import { authFailureCopy, type Account, type AuthFailure, type Viewer } from './identity.ts'
 
 function escapeHtml(value: string): string {
@@ -105,8 +106,61 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
       font-size: 22px;
       font-weight: 650;
       letter-spacing: -0.02em;
+      overflow-wrap: anywhere;
     }
     p { margin: 0; color: #5c564c; }
+    .card p + p { margin-top: 8px; }
+    label {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      min-height: 48px;
+      margin-top: 16px;
+      font-weight: 650;
+    }
+    input {
+      display: block;
+      width: 100%;
+      min-height: 48px;
+      margin-top: 8px;
+      padding: 0 16px;
+      border: 1px solid #e7e0d4;
+      border-radius: 14px;
+      background: #fffdf8;
+      color: inherit;
+      font: inherit;
+    }
+    ul.groups, ul.members {
+      list-style: none;
+      margin: 16px 0 0;
+      padding: 0;
+    }
+    ul.groups li, ul.members li {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 48px;
+    }
+    ul.groups a {
+      display: flex;
+      align-items: center;
+      flex: 1;
+      min-height: 48px;
+      color: #1c1915;
+      font-weight: 650;
+      text-decoration: none;
+    }
+    .count { color: #5c564c; }
+    .members time { color: #5c564c; }
+    .share { margin-top: 16px; overflow-wrap: anywhere; }
+    .share a {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      min-height: 48px;
+      color: #1c1915;
+      font-weight: 650;
+    }
     .who { display: flex; gap: 12px; align-items: center; }
     .who img, .avatar {
       width: 56px;
@@ -228,11 +282,72 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
 </html>
 `
 
-function portrait(account: Account): string {
-  const avatar = safeAvatar(account.avatarUrl)
+function portrait(person: { displayName: string; avatarUrl: string | null }): string {
+  const avatar = safeAvatar(person.avatarUrl)
   if (avatar) return `<img src="${avatar}" alt="">`
-  const initial = escapeHtml(account.displayName.trim().charAt(0) || '?')
+  const initial = escapeHtml(Array.from(person.displayName.trim())[0] || '?')
   return `<div class="avatar" aria-hidden="true">${initial}</div>`
+}
+
+const groupsRoot = '/groups'
+const joinSuffix = '/join'
+
+export type HomePage =
+  | { state: 'signed_out' }
+  | { state: 'signed_in'; account: Account; groups: readonly HomeGroup[] }
+
+export type GroupRoute =
+  | { kind: 'new' }
+  | { kind: 'create' }
+  | { kind: 'show'; groupId: GroupId }
+  | { kind: 'join'; groupId: GroupId }
+
+export function groupHref(groupId: GroupId): string {
+  return `${groupsRoot}/${groupId}`
+}
+
+function activeCountText(count: number): string {
+  return `${count} active`
+}
+
+function googleReturnHref(returnPath: string): string {
+  return `/auth/google?return=${encodeURIComponent(returnPath)}`
+}
+
+export function matchGroupPath(path: string): GroupRoute | null {
+  if (path === `${groupsRoot}/new`) return { kind: 'new' }
+  if (path === groupsRoot) return { kind: 'create' }
+  if (!path.startsWith(`${groupsRoot}/`)) return null
+  const rest = path.slice(groupsRoot.length + 1)
+  if (rest.endsWith(joinSuffix) && rest.length > joinSuffix.length) {
+    const idPart = rest.slice(0, -joinSuffix.length)
+    if (idPart.includes('/')) return null
+    const groupId = parseGroupId(idPart)
+    return groupId ? { kind: 'join', groupId } : null
+  }
+  if (rest.includes('/')) return null
+  const groupId = parseGroupId(rest)
+  return groupId ? { kind: 'show', groupId } : null
+}
+
+export function safeReturnPath(raw: string | null): string {
+  if (!raw) return '/'
+  const route = matchGroupPath(raw)
+  if (route?.kind === 'new') return `${groupsRoot}/new`
+  if (route?.kind === 'show') return groupHref(route.groupId)
+  return '/'
+}
+
+function homeGroups(groups: readonly HomeGroup[]): string {
+  if (groups.length === 0) return '<p>You are not in a group yet.</p>'
+  const items = groups
+    .map((group) => {
+      const href = escapeHtml(groupHref(group.groupId))
+      const name = escapeHtml(group.name)
+      return `<li><a href="${href}">${name}</a> <span class="count">${activeCountText(group.activeCount)}</span></li>`
+    })
+    .join('')
+  return `<ul class="groups">${items}</ul>`
 }
 
 function signedOutScreens(): string {
@@ -254,14 +369,15 @@ function signedOutScreens(): string {
   `
 }
 
-function signedInScreens(account: Account): string {
+function signedInScreens(account: Account, groups: readonly HomeGroup[]): string {
   const name = escapeHtml(account.displayName)
   const email = escapeHtml(account.email)
   return `
     <section id="home" class="screen">
       <article class="card">
         <h2>Hello, ${name}</h2>
-        <p>You are signed in. Your group will use this account.</p>
+        ${homeGroups(groups)}
+        <a class="button" href="${groupsRoot}/new">Create a group</a>
       </article>
     </section>
     <section id="account" class="screen">
@@ -281,9 +397,83 @@ function signedInScreens(account: Account): string {
   `
 }
 
-export function renderHome(viewer: Viewer): string {
-  const screens = viewer.state === 'signed_out' ? signedOutScreens() : signedInScreens(viewer.account)
+export function renderHome(page: HomePage): string {
+  const screens = page.state === 'signed_out' ? signedOutScreens() : signedInScreens(page.account, page.groups)
   return frame(screens, tabBar('#home', '#account'))
+}
+
+function groupCard(body: string): string {
+  const screens = `
+    <section class="screen is-current">
+      <article class="card">
+        ${body}
+      </article>
+    </section>
+  `
+  return frame(screens, tabBar('/', '/#account'))
+}
+
+export function renderNewGroup(viewer: Viewer, error?: 'name_empty' | 'name_too_long'): string {
+  if (viewer.state === 'signed_out') {
+    const href = escapeHtml(googleReturnHref(`${groupsRoot}/new`))
+    return groupCard(`
+      <h2>Create a group</h2>
+      <p>Sign in to create a group.</p>
+      <a class="button" href="${href}">Sign in with Google</a>
+    `)
+  }
+  const message =
+    error === 'name_empty'
+      ? '<p>Type a group name.</p>'
+      : error === 'name_too_long'
+        ? '<p>Use 40 characters or fewer.</p>'
+        : ''
+  return groupCard(`
+    <h2>Create a group</h2>
+    ${message}
+    <form method="post" action="${groupsRoot}">
+      <label for="group-name">Group name</label>
+      <input id="group-name" name="name" autocomplete="off" required>
+      <button type="submit">Create group</button>
+    </form>
+  `)
+}
+
+function memberItem(member: MemberLine): string {
+  const when = escapeHtml(member.joinedOn)
+  return `<li>${portrait(member)} ${escapeHtml(member.displayName)} <time datetime="${when}">${when}</time></li>`
+}
+
+function joinControl(groupId: GroupId, viewer: Viewer): string {
+  if (viewer.state === 'signed_out') {
+    const href = escapeHtml(googleReturnHref(groupHref(groupId)))
+    return `<a class="button" href="${href}">Sign in with Google</a>`
+  }
+  const action = escapeHtml(`${groupHref(groupId)}${joinSuffix}`)
+  return `<form method="post" action="${action}"><button type="submit">Join group</button></form>`
+}
+
+export function renderGroup(
+  view: Exclude<GroupView, { kind: 'missing' }>,
+  viewer: Viewer,
+  origin: string,
+): string {
+  const title = `<h2>${escapeHtml(view.name)}</h2>`
+  const count = `<p class="count">${activeCountText(view.activeCount)}</p>`
+  if (view.kind === 'full') {
+    return groupCard(`${title}${count}<p>This group is full.</p>`)
+  }
+  if (view.kind === 'preview') {
+    return groupCard(`${title}${count}${joinControl(view.groupId, viewer)}`)
+  }
+  const share = escapeHtml(`${origin}${groupHref(view.groupId)}`)
+  return groupCard(`
+    ${title}
+    ${count}
+    <p>A challenge can start later when 3 to 5 people are active.</p>
+    <ul class="members">${view.members.map(memberItem).join('')}</ul>
+    <p class="share">Share this link to invite someone. <a href="${share}">${share}</a></p>
+  `)
 }
 
 export function renderFailure(failure: AuthFailure): string {
