@@ -41,6 +41,9 @@ test('every page is the same phone shell', () => {
     assert.doesNotMatch(html, /rel="manifest"/)
     assert.doesNotMatch(html, /apple-mobile-web-app/)
   }
+  const preview = pages[4]
+  assert.match(preview, /class="screen is-current"/)
+  assert.doesNotMatch(preview, /<section[^>]*\sid=/)
 })
 
 test('signed-out shell keeps Google sign-in on the phone screens', () => {
@@ -55,6 +58,9 @@ test('signed-out shell keeps Google sign-in on the phone screens', () => {
 test('signed-in shell keeps the account card and sign-out', () => {
   const html = renderHome({ state: 'signed_in', account, groups: [] })
   assert.match(html, /Hello, Ada/)
+  assert.match(html, /You are not in a group yet/)
+  assert.match(html, /href="\/groups\/new"/)
+  assert.doesNotMatch(html, /Your group will use this account/)
   assert.match(html, /ada@example.com/)
   assert.match(html, /https:\/\/lh3.googleusercontent.com\/a\/ada/)
   assert.match(html, /action="\/logout"/)

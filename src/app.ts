@@ -175,6 +175,7 @@ async function handleGroup(
   if (route.kind === 'create') {
     if (method !== 'POST') return rejectMethod(res, 'POST')
     if (viewer.state === 'signed_out') {
+      req.resume()
       sendHtml(res, 401, renderNewGroup(viewer))
       return
     }
@@ -213,8 +214,17 @@ async function handleGroup(
       sendHtml(res, 404, renderMessage('Not found', 'That page does not exist.'))
       return
     }
-    const status = view.kind === 'full' ? 409 : 401
-    sendHtml(res, status, renderGroup(view, viewer, origin))
+    if (view.kind === 'full') {
+      sendHtml(res, 409, renderGroup(view, viewer, origin))
+      return
+    }
+    const preview = {
+      kind: 'preview' as const,
+      groupId: view.groupId,
+      name: view.name,
+      activeCount: view.activeCount,
+    }
+    sendHtml(res, 401, renderGroup(preview, viewer, origin))
     return
   }
   const joined = await joinGroup(deps.db, viewer.account, route.groupId)
@@ -236,7 +246,8 @@ async function handleGroup(
 
 async function readForm(req: IncomingMessage): Promise<URLSearchParams | 'too_large' | 'bad_type'> {
   const type = req.headers['content-type']
-  if (typeof type !== 'string' || !type.startsWith('application/x-www-form-urlencoded')) return 'bad_type'
+  const media = typeof type === 'string' ? type.split(';')[0]?.trim().toLowerCase() : ''
+  if (media !== 'application/x-www-form-urlencoded') return 'bad_type'
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of req) {

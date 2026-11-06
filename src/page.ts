@@ -1,5 +1,4 @@
-import type { GroupId, GroupView, HomeGroup, NameFailure } from './groups.ts'
-import { parseGroupId } from './groups.ts'
+import { parseGroupId, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
 import { authFailureCopy, type Account, type AuthFailure, type Viewer } from './identity.ts'
 
 function escapeHtml(value: string): string {
@@ -110,8 +109,12 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
       overflow-wrap: anywhere;
     }
     p { margin: 0; color: #5c564c; }
+    .card p + p { margin-top: 8px; }
     label {
-      display: block;
+      display: flex;
+      align-items: center;
+      width: 100%;
+      min-height: 48px;
       margin-top: 16px;
       font-weight: 650;
     }
@@ -127,22 +130,37 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
       color: inherit;
       font: inherit;
     }
-    .groups, .members { list-style: none; margin: 16px 0 0; padding: 0; }
-    .groups a {
+    ul.groups, ul.members {
+      list-style: none;
+      margin: 16px 0 0;
+      padding: 0;
+    }
+    ul.groups li, ul.members li {
       display: flex;
       align-items: center;
-      justify-content: space-between;
       gap: 12px;
       min-height: 48px;
-      color: inherit;
+    }
+    ul.groups a {
+      display: flex;
+      align-items: center;
+      flex: 1;
+      min-height: 48px;
+      color: #1c1915;
       font-weight: 650;
       text-decoration: none;
     }
-    .members li { margin-top: 12px; }
-    .members li:first-child { margin-top: 0; }
-    .count { color: #5c564c; font-size: 14px; font-weight: 650; }
+    .count { color: #5c564c; }
+    .members time { color: #5c564c; }
     .share { margin-top: 16px; overflow-wrap: anywhere; }
-    .share a { color: inherit; font-weight: 650; }
+    .share a {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      min-height: 48px;
+      color: #1c1915;
+      font-weight: 650;
+    }
     .who { display: flex; gap: 12px; align-items: center; }
     .who img, .avatar {
       width: 56px;
@@ -267,8 +285,69 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
 function portrait(person: { displayName: string; avatarUrl: string | null }): string {
   const avatar = safeAvatar(person.avatarUrl)
   if (avatar) return `<img src="${avatar}" alt="">`
-  const initial = escapeHtml(person.displayName.trim().charAt(0) || '?')
+  const initial = escapeHtml(Array.from(person.displayName.trim())[0] || '?')
   return `<div class="avatar" aria-hidden="true">${initial}</div>`
+}
+
+const groupsRoot = '/groups'
+const joinSuffix = '/join'
+
+export type HomePage =
+  | { state: 'signed_out' }
+  | { state: 'signed_in'; account: Account; groups: readonly HomeGroup[] }
+
+export type GroupRoute =
+  | { kind: 'new' }
+  | { kind: 'create' }
+  | { kind: 'show'; groupId: GroupId }
+  | { kind: 'join'; groupId: GroupId }
+
+export function groupHref(groupId: GroupId): string {
+  return `${groupsRoot}/${groupId}`
+}
+
+function activeCountText(count: number): string {
+  return `${count} active`
+}
+
+function googleReturnHref(returnPath: string): string {
+  return `/auth/google?return=${encodeURIComponent(returnPath)}`
+}
+
+export function matchGroupPath(path: string): GroupRoute | null {
+  if (path === `${groupsRoot}/new`) return { kind: 'new' }
+  if (path === groupsRoot) return { kind: 'create' }
+  if (!path.startsWith(`${groupsRoot}/`)) return null
+  const rest = path.slice(groupsRoot.length + 1)
+  if (rest.endsWith(joinSuffix) && rest.length > joinSuffix.length) {
+    const idPart = rest.slice(0, -joinSuffix.length)
+    if (idPart.includes('/')) return null
+    const groupId = parseGroupId(idPart)
+    return groupId ? { kind: 'join', groupId } : null
+  }
+  if (rest.includes('/')) return null
+  const groupId = parseGroupId(rest)
+  return groupId ? { kind: 'show', groupId } : null
+}
+
+export function safeReturnPath(raw: string | null): string {
+  if (!raw) return '/'
+  const route = matchGroupPath(raw)
+  if (route?.kind === 'new') return `${groupsRoot}/new`
+  if (route?.kind === 'show') return groupHref(route.groupId)
+  return '/'
+}
+
+function homeGroups(groups: readonly HomeGroup[]): string {
+  if (groups.length === 0) return '<p>You are not in a group yet.</p>'
+  const items = groups
+    .map((group) => {
+      const href = escapeHtml(groupHref(group.groupId))
+      const name = escapeHtml(group.name)
+      return `<li><a href="${href}">${name}</a> <span class="count">${activeCountText(group.activeCount)}</span></li>`
+    })
+    .join('')
+  return `<ul class="groups">${items}</ul>`
 }
 
 function signedOutScreens(): string {
@@ -293,22 +372,11 @@ function signedOutScreens(): string {
 function signedInScreens(account: Account, groups: readonly HomeGroup[]): string {
   const name = escapeHtml(account.displayName)
   const email = escapeHtml(account.email)
-  const list =
-    groups.length === 0
-      ? '<p>You are not in a group yet.</p>'
-      : `<ul class="groups">${groups
-          .map((group) => {
-            const href = escapeHtml(groupHref(group.groupId))
-            const label = escapeHtml(group.name)
-            const count = escapeHtml(activeCountText(group.activeCount))
-            return `<li><a href="${href}">${label}<span class="count">${count}</span></a></li>`
-          })
-          .join('')}</ul>`
   return `
     <section id="home" class="screen">
       <article class="card">
         <h2>Hello, ${name}</h2>
-        ${list}
+        ${homeGroups(groups)}
         <a class="button" href="${groupsRoot}/new">Create a group</a>
       </article>
     </section>
@@ -329,77 +397,60 @@ function signedInScreens(account: Account, groups: readonly HomeGroup[]): string
   `
 }
 
-const groupsRoot = '/groups'
-const joinSuffix = '/join'
-
-const nameFailureCopy: Record<NameFailure, string> = {
-  name_empty: 'Type a group name.',
-  name_too_long: 'Use 40 characters or fewer.',
-}
-
-export function groupHref(groupId: GroupId): string {
-  return `${groupsRoot}/${groupId}`
-}
-
-function activeCountText(count: number): string {
-  return `${count} active`
-}
-
-function googleReturnHref(returnPath: string): string {
-  return `/auth/google?return=${encodeURIComponent(returnPath)}`
-}
-
-export type GroupRoute =
-  | { kind: 'new' }
-  | { kind: 'create' }
-  | { kind: 'show'; groupId: GroupId }
-  | { kind: 'join'; groupId: GroupId }
-
-export function matchGroupPath(path: string): GroupRoute | null {
-  if (path === `${groupsRoot}/new`) return { kind: 'new' }
-  if (path === groupsRoot) return { kind: 'create' }
-  if (!path.startsWith(`${groupsRoot}/`)) return null
-  const rest = path.slice(groupsRoot.length + 1)
-  if (rest.endsWith(joinSuffix) && rest.length > joinSuffix.length) {
-    const groupId = parseGroupId(rest.slice(0, -joinSuffix.length))
-    return groupId ? { kind: 'join', groupId } : null
-  }
-  if (rest.includes('/')) return null
-  const groupId = parseGroupId(rest)
-  return groupId ? { kind: 'show', groupId } : null
-}
-
-export function safeReturnPath(raw: string | null): string {
-  if (!raw) return '/'
-  const route = matchGroupPath(raw)
-  if (route?.kind === 'new') return `${groupsRoot}/new`
-  if (route?.kind === 'show') return groupHref(route.groupId)
-  return '/'
-}
-
-export type HomePage =
-  | { state: 'signed_out' }
-  | { state: 'signed_in'; account: Account; groups: readonly HomeGroup[] }
-
 export function renderHome(page: HomePage): string {
   const screens = page.state === 'signed_out' ? signedOutScreens() : signedInScreens(page.account, page.groups)
   return frame(screens, tabBar('#home', '#account'))
 }
 
-export function renderNewGroup(viewer: Viewer, error?: NameFailure): string {
-  const card =
-    viewer.state === 'signed_out'
-      ? `<h2>Create a group</h2>
-        <p>Sign in to create a group.</p>
-        <a class="button" href="${escapeHtml(googleReturnHref(`${groupsRoot}/new`))}">Sign in with Google</a>`
-      : `<h2>Create a group</h2>
-        ${error ? `<p>${escapeHtml(nameFailureCopy[error])}</p>` : ''}
-        <form method="post" action="${groupsRoot}">
-          <label for="group-name">Group name</label>
-          <input id="group-name" name="name" autocomplete="off" required>
-          <button type="submit">Create group</button>
-        </form>`
-  return frame(screen(card), tabBar('/', '/#account'))
+function groupCard(body: string): string {
+  const screens = `
+    <section class="screen is-current">
+      <article class="card">
+        ${body}
+      </article>
+    </section>
+  `
+  return frame(screens, tabBar('/', '/#account'))
+}
+
+export function renderNewGroup(viewer: Viewer, error?: 'name_empty' | 'name_too_long'): string {
+  if (viewer.state === 'signed_out') {
+    const href = escapeHtml(googleReturnHref(`${groupsRoot}/new`))
+    return groupCard(`
+      <h2>Create a group</h2>
+      <p>Sign in to create a group.</p>
+      <a class="button" href="${href}">Sign in with Google</a>
+    `)
+  }
+  const message =
+    error === 'name_empty'
+      ? '<p>Type a group name.</p>'
+      : error === 'name_too_long'
+        ? '<p>Use 40 characters or fewer.</p>'
+        : ''
+  return groupCard(`
+    <h2>Create a group</h2>
+    ${message}
+    <form method="post" action="${groupsRoot}">
+      <label for="group-name">Group name</label>
+      <input id="group-name" name="name" autocomplete="off" required>
+      <button type="submit">Create group</button>
+    </form>
+  `)
+}
+
+function memberItem(member: MemberLine): string {
+  const when = escapeHtml(member.joinedOn)
+  return `<li>${portrait(member)} ${escapeHtml(member.displayName)} <time datetime="${when}">${when}</time></li>`
+}
+
+function joinControl(groupId: GroupId, viewer: Viewer): string {
+  if (viewer.state === 'signed_out') {
+    const href = escapeHtml(googleReturnHref(groupHref(groupId)))
+    return `<a class="button" href="${href}">Sign in with Google</a>`
+  }
+  const action = escapeHtml(`${groupHref(groupId)}${joinSuffix}`)
+  return `<form method="post" action="${action}"><button type="submit">Join group</button></form>`
 }
 
 export function renderGroup(
@@ -407,38 +458,22 @@ export function renderGroup(
   viewer: Viewer,
   origin: string,
 ): string {
-  const name = escapeHtml(view.name)
-  const count = escapeHtml(activeCountText(view.activeCount))
-  if (view.kind === 'members') {
-    const members = view.members
-      .map((member) => {
-        const label = escapeHtml(member.displayName)
-        const joined = escapeHtml(member.joinedOn)
-        return `<li class="who">${portrait(member)}<div><div class="name">${label}</div><div class="joined">Joined <time datetime="${joined}">${joined}</time></div></div></li>`
-      })
-      .join('')
-    const share = escapeHtml(`${origin}${groupHref(view.groupId)}`)
-    const card = `<h2>${name}</h2>
-      <p class="count">${count}</p>
-      <p>A challenge can start later when 3 to 5 people are active.</p>
-      <ul class="members">${members}</ul>
-      <p class="share">Share this link to invite someone. <a href="${share}">${share}</a></p>`
-    return frame(screen(card), tabBar('/', '/#account'))
-  }
+  const title = `<h2>${escapeHtml(view.name)}</h2>`
+  const count = `<p class="count">${activeCountText(view.activeCount)}</p>`
   if (view.kind === 'full') {
-    const card = `<h2>${name}</h2><p class="count">${count}</p><p>This group is full.</p>`
-    return frame(screen(card), tabBar('/', '/#account'))
+    return groupCard(`${title}${count}<p>This group is full.</p>`)
   }
-  const action =
-    viewer.state === 'signed_out'
-      ? `<a class="button" href="${escapeHtml(googleReturnHref(groupHref(view.groupId)))}">Sign in with Google</a>`
-      : `<form method="post" action="${escapeHtml(`${groupHref(view.groupId)}${joinSuffix}`)}"><button type="submit">Join group</button></form>`
-  const card = `<h2>${name}</h2><p class="count">${count}</p>${action}`
-  return frame(screen(card), tabBar('/', '/#account'))
-}
-
-function screen(card: string): string {
-  return `<section class="screen is-current"><article class="card">${card}</article></section>`
+  if (view.kind === 'preview') {
+    return groupCard(`${title}${count}${joinControl(view.groupId, viewer)}`)
+  }
+  const share = escapeHtml(`${origin}${groupHref(view.groupId)}`)
+  return groupCard(`
+    ${title}
+    ${count}
+    <p>A challenge can start later when 3 to 5 people are active.</p>
+    <ul class="members">${view.members.map(memberItem).join('')}</ul>
+    <p class="share">Share this link to invite someone. <a href="${share}">${share}</a></p>
+  `)
 }
 
 export function renderFailure(failure: AuthFailure): string {

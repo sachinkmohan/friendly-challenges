@@ -1,17 +1,12 @@
 import type { PGlite } from '@electric-sql/pglite'
 import type { Account } from './identity.ts'
 
-/** Lowercase uuid text. Constructed by parseGroupId or by createGroup. */
 export type GroupId = string & { readonly brand: 'GroupId' }
 
 const GROUP_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const JOINED_ON = /^\d{4}-\d{2}-\d{2}$/
 const NAME_MAX = 40
 
-/**
- * Accepts lowercase 8-4-4-4-12 hex only.
- * Uppercase, braces, and urn prefixes return null so a path has one spelling.
- */
 export function parseGroupId(raw: string): GroupId | null {
   if (!GROUP_ID.test(raw)) return null
   return raw as GroupId
@@ -25,20 +20,12 @@ export type JoinResult =
   | { ok: true; groupId: GroupId }
   | { ok: false; failure: 'group_missing' | 'group_full' }
 
-/** One line on the member list. joinedOn is YYYY-MM-DD from joined_on::text. */
 export type MemberLine = {
   displayName: string
   avatarUrl: string | null
   joinedOn: string
 }
 
-/**
- * Closed set of group pages.
- * members is the only kind that carries a roster.
- * full and preview carry the name and the active count.
- * A member of a full group is members, not full.
- * The page does not compare activeCount to a cap.
- */
 export type GroupView =
   | { kind: 'missing' }
   | {
@@ -51,7 +38,6 @@ export type GroupView =
   | { kind: 'preview'; groupId: GroupId; name: string; activeCount: number }
   | { kind: 'full'; groupId: GroupId; name: string; activeCount: number }
 
-/** Home row for a group the account is active in. */
 export type HomeGroup = {
   groupId: GroupId
   name: string
@@ -67,7 +53,7 @@ type DbError = {
 type GroupPageRow = {
   name: string
   active_count: number | string
-  is_full: boolean
+  full: boolean
   viewer_is_member: boolean | null
   members: unknown
 }
@@ -204,7 +190,7 @@ export async function viewGroup(
   const result = await db.query<GroupPageRow>(
     `SELECT g.name,
             count(a.user_id)::int AS active_count,
-            count(a.user_id)::int >= active_member_cap() AS is_full,
+            count(a.user_id)::int >= active_member_cap() AS full,
             bool_or(a.user_id = $2::uuid) AS viewer_is_member,
             CASE WHEN bool_or(a.user_id = $2::uuid) THEN
               json_agg(
@@ -237,7 +223,7 @@ export async function viewGroup(
       members: parseMembers(row.members),
     }
   }
-  if (flagFrom(row.is_full)) {
+  if (flagFrom(row.full)) {
     return { kind: 'full', groupId, name: row.name, activeCount }
   }
   return { kind: 'preview', groupId, name: row.name, activeCount }

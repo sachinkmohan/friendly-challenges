@@ -151,6 +151,8 @@ test('the creator is the first member and a second person can join', async () =>
     const home = await (await fetch(base, { headers: { cookie: ada.cookie } })).text()
     assert.match(home, /Morning run/)
     assert.match(home, /Evening run/)
+    assert.match(home, /2 active/)
+    assert.match(home, /1 active/)
     assert.match(home, /Create a group/)
   } finally {
     await close(server, db)
@@ -189,7 +191,18 @@ test('a sixth active member is rejected by the database', async () => {
          VALUES ($1, $2, (now() AT TIME ZONE 'utc')::date)`,
         [groupId, people[5].userId],
       ),
+      (error: unknown) => {
+        assert.ok(error instanceof Error)
+        assert.equal((error as { code?: string }).code, 'P0001')
+        assert.equal(error.message, 'group_full')
+        return true
+      },
     )
+    const anonFull = await postForm(base, `${groupPath}/join`, null)
+    assert.equal(anonFull.status, 409)
+    const anonFullHtml = await anonFull.text()
+    assert.match(anonFullHtml, /This group is full/)
+    assert.doesNotMatch(anonFullHtml, /<form/)
     const active = await db.query<{ n: number }>(
       `SELECT count(*)::int AS n FROM memberships WHERE group_id = $1 AND left_on IS NULL`,
       [groupId],
@@ -224,6 +237,19 @@ test('a blank or oversized name does not create a group', async () => {
     const ok = await postForm(base, '/groups', ada.cookie, `name=${'b'.repeat(40)}`)
     assert.equal(ok.status, 303)
     assert.equal(await countRows(db, 'groups'), 1)
+    const emoji = '😀'.repeat(40)
+    const emojiGroup = await postForm(base, '/groups', ada.cookie, `name=${encodeURIComponent(emoji)}`)
+    assert.equal(emojiGroup.status, 303)
+    const tooManyEmoji = await postForm(base, '/groups', ada.cookie, `name=${encodeURIComponent('😀'.repeat(41))}`)
+    assert.equal(tooManyEmoji.status, 400)
+    assert.match(await tooManyEmoji.text(), /40 characters or fewer/)
+    await assert.rejects(
+      db.query(`INSERT INTO groups (id, name) VALUES ($1::uuid, $2)`, [crypto.randomUUID(), 'c'.repeat(41)]),
+    )
+    await assert.rejects(
+      db.query(`INSERT INTO groups (id, name) VALUES ($1::uuid, $2)`, [crypto.randomUUID(), '   ']),
+    )
+    assert.equal(await countRows(db, 'groups'), 2)
   } finally {
     await close(server, db)
   }
@@ -247,6 +273,19 @@ test('a signed-out person cannot create or join', async () => {
     const joinHtml = await join.text()
     assert.match(joinHtml, /Sign in with Google/)
     assert.doesNotMatch(joinHtml, /Ada/)
+    assert.equal(await countRows(db, 'groups'), beforeGroups)
+    assert.equal(await countRows(db, 'memberships'), beforeMembers)
+    const getGroups = await fetch(`${base}/groups`)
+    assert.equal(getGroups.status, 405)
+    assert.equal(getGroups.headers.get('allow'), 'POST')
+    const postNew = await postForm(base, '/groups/new', ada.cookie)
+    assert.equal(postNew.status, 405)
+    assert.equal(postNew.headers.get('allow'), 'GET')
+    const postShow = await postForm(base, groupPath, ada.cookie)
+    assert.equal(postShow.status, 405)
+    assert.equal(postShow.headers.get('allow'), 'GET')
+    const missing = await fetch(`${base}/groups/00000000-0000-4000-8000-000000000099`)
+    assert.equal(missing.status, 404)
     assert.equal(await countRows(db, 'groups'), beforeGroups)
     assert.equal(await countRows(db, 'memberships'), beforeMembers)
     const page = await fetch(`${base}/groups/new`)
@@ -287,6 +326,16 @@ test('a signed-out join link comes back to the same group after Google', async (
       { redirect: 'manual', headers: { cookie: cookiesFrom(hostile) } },
     )
     assert.equal(home.headers.get('location'), '/')
+
+    const protocolRelative = await fetch(`${base}/auth/google?return=${encodeURIComponent('//evil.example')}`, {
+      redirect: 'manual',
+    })
+    const protocolState = new URL(protocolRelative.headers.get('location') ?? '').searchParams.get('state')
+    const protocolHome = await fetch(
+      `${base}/auth/google/callback?code=good-code&state=${encodeURIComponent(protocolState ?? '')}`,
+      { redirect: 'manual', headers: { cookie: cookiesFrom(protocolRelative) } },
+    )
+    assert.equal(protocolHome.headers.get('location'), '/')
 
     const joinReturn = await fetch(`${base}/auth/google?return=${encodeURIComponent(`${groupPath}/join`)}`, {
       redirect: 'manual',
