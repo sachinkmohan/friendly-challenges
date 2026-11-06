@@ -1,11 +1,21 @@
-# {Short title of the decision}
+# 0001: We will not build X
 
-{1-3 sentences: what the context is, what we decided, and why.}
+- **Status:** accepted
+- **Date:** YYYY-MM-DD
 
-## Status
+## Context
 
-Accepted
+The product question that keeps coming back in new agent
+threads. A few sentences on the relevant system state and
+constraints, with links to code or docs.
+
+## Decision
+
+We will not build X. Use the existing path instead.
+Revisit if Y becomes true.
 
 ## Consequences
 
-{Include only when a downstream effect would surprise a later reader.}
+Next agent proposes the existing path, not a new surface.
+What stays simple, what gets harder, and what would
+trigger revisiting.
