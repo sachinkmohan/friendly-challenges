@@ -18,6 +18,12 @@ Open `http://127.0.0.1:3000`. Sign in with Google. The page shows your name, ema
 
 Signing in again with the same Google account updates that row. It does not create a second user.
 
+## Groups
+
+Sign in. Choose **Create a group** and type a name. You are the first member. The group page shows the members, the active count, each join date, and an invite link.
+
+Open that link while signed in as someone else. Choose **Join group**. A sixth person cannot join. The page says the group is full. Leave dates stay empty. Starting a challenge comes later, and it needs 3 to 5 active members.
+
 ## Check
 
 ```bash

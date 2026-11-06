@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { renderHome, renderMessage } from '../src/page.ts'
+import { parseGroupId } from '../src/groups.ts'
+import { renderGroup, renderHome, renderMessage, renderNewGroup } from '../src/page.ts'
 
 const account = {
   id: '1',
@@ -11,9 +12,18 @@ const account = {
 }
 
 test('every page is the same phone shell', () => {
+  const groupId = parseGroupId('00000000-0000-4000-8000-000000000001')
+  if (!groupId) throw new Error('fixture group id')
   const pages = [
     renderHome({ state: 'signed_out' }),
-    renderHome({ state: 'signed_in', account }),
+    renderHome({ state: 'signed_in', account, groups: [] }),
+    renderNewGroup({ state: 'signed_out' }),
+    renderNewGroup({ state: 'signed_in', account }),
+    renderGroup(
+      { kind: 'preview', groupId, name: 'Morning run', activeCount: 1 },
+      { state: 'signed_out' },
+      'http://127.0.0.1:3000',
+    ),
     renderMessage('Not found', 'That page does not exist.'),
   ]
   for (const html of pages) {
@@ -43,7 +53,7 @@ test('signed-out shell keeps Google sign-in on the phone screens', () => {
 })
 
 test('signed-in shell keeps the account card and sign-out', () => {
-  const html = renderHome({ state: 'signed_in', account })
+  const html = renderHome({ state: 'signed_in', account, groups: [] })
   assert.match(html, /Hello, Ada/)
   assert.match(html, /ada@example.com/)
   assert.match(html, /https:\/\/lh3.googleusercontent.com\/a\/ada/)
