@@ -7,10 +7,9 @@ import {
   type IsoDate,
   type MembershipSpan,
   type Rhythm,
-  type RhythmLine,
 } from './challenge.ts'
-import { isColor, type CheckIn, type CheckInColor } from './checkins.ts'
-import { parseGroupId, type GroupId, type MemberLine } from './groups.ts'
+import { isColor, type CheckInColor } from './checkins.ts'
+import { parseGroupId, type GroupId } from './groups.ts'
 import type { Account } from './identity.ts'
 
 export const DAY_MARK_LABELS = {
@@ -139,32 +138,6 @@ export function weeksOf(days: readonly MarkedDay[]): readonly HeatmapWeek[] {
   }
   if (week.length > 0) weeks.push([...week, ...Array.from({ length: 7 - week.length }, () => null)])
   return weeks
-}
-
-function colorsByDay(checkIns: readonly CheckIn[], userId: string): ReadonlyMap<IsoDate, CheckInColor> {
-  return new Map(checkIns.filter((item) => item.userId === userId).map((item) => [item.day, item.color]))
-}
-
-export function groupCalendar(input: {
-  readonly window: ChallengeWindow
-  readonly today: IsoDate
-  readonly members: readonly MemberLine[]
-  readonly rhythms: readonly RhythmLine[]
-  readonly checkIns: readonly CheckIn[]
-}): GroupCalendar {
-  const members = input.members.map((member): CalendarMember => {
-    const joinedOn = parseIsoDate(member.joinedOn)
-    if (!joinedOn) throw new Error('member date')
-    const line = input.rhythms.find((item) => item.userId === member.userId)
-    return {
-      userId: member.userId,
-      displayName: member.displayName,
-      span: { joinedOn, leftOn: null },
-      rhythm: line ? { kind: line.kind, anchorOn: line.anchorOn } : null,
-      colors: colorsByDay(input.checkIns, member.userId),
-    }
-  })
-  return buildCalendar({ window: input.window, today: input.today }, members)
 }
 
 type HeatmapRow = {

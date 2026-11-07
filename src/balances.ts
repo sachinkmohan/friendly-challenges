@@ -1,5 +1,5 @@
 import type { PGlite } from '@electric-sql/pglite'
-import { buildCalendar, type CalendarMember, type CalendarSpan } from './calendar.ts'
+import { buildCalendar, type CalendarMember, type CalendarSpan, type GroupCalendar } from './calendar.ts'
 import {
   isRhythmKind,
   parseIsoDate,
@@ -58,6 +58,7 @@ export type Settlement = {
 }
 
 export type Ledger = Settlement & {
+  readonly calendar: GroupCalendar
   readonly currency: CurrencyCode
   readonly minorDigits: number
   readonly people: readonly { readonly userId: string; readonly displayName: string }[]
@@ -112,7 +113,14 @@ export function missedDayDebts(
   stakeMinor: number,
   members: readonly CalendarMember[],
 ): readonly Debt[] {
-  const calendar = buildCalendar(span, members)
+  return calendarDebts(buildCalendar(span, members), stakeMinor, members)
+}
+
+function calendarDebts(
+  calendar: GroupCalendar,
+  stakeMinor: number,
+  members: readonly CalendarMember[],
+): readonly Debt[] {
   const debts: Debt[] = []
   for (const row of calendar.rows) {
     for (const marked of row.days) {
@@ -298,15 +306,18 @@ async function loadPayments(db: PGlite, groupId: GroupId): Promise<readonly Paym
 }
 
 // Nets are recomputed from check-ins, membership dates, and payments on every read. Nothing is cached.
+// The calendar rows come from every membership, so a member who left keeps their row and their debts.
 export async function readLedger(db: PGlite, groupId: GroupId, today: IsoDate): Promise<Ledger | null> {
   const terms = await loadActiveTerms(db, groupId, false)
   if (!terms) return null
   const members = await loadMembers(db, groupId)
   const payments = await loadPayments(db, groupId)
   const window = { phase: 'active', startsOn: terms.startsOn, endsOn: terms.endsOn } as const
-  const debts = missedDayDebts({ window, today }, terms.stakeMinor, members)
+  const calendar = buildCalendar({ window, today }, members)
+  const debts = calendarDebts(calendar, terms.stakeMinor, members)
   const people = members.map((member) => ({ userId: member.userId, displayName: member.displayName }))
   return {
+    calendar,
     currency: terms.currency,
     minorDigits: terms.minorDigits,
     people,

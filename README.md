@@ -22,7 +22,7 @@ Signing in again with the same Google account updates that row. It does not crea
 
 Sign in. Choose **Create a group** and type a name. You are the first member. The group page shows the members, the active count, each join date, and an invite link.
 
-Open that link while signed in as someone else. Choose **Join group**. A sixth person cannot join. The page says the group is full. Leave dates stay empty.
+Open that link while signed in as someone else. Choose **Join group**. A sixth person cannot join. The page says the group is full.
 
 On the group page, name the challenge, pick the type, the currency, and the stake per day. The stake is the amount in that currency, and the app stores the minor units. Each member picks how often they log and an anchor date. The choices are every day, every 2 days, every 3 days, and alternate days. **Start challenge** appears when 3 to 5 people are active. After the start, the shared terms stay as they are. A member who has not picked a rhythm can still save one. A saved rhythm stays put.
 
@@ -45,6 +45,14 @@ Between two people, the app nets the debts in both directions, then subtracts re
 To record a payment you already made outside the app, choose **Paid to**, the amount in the challenge currency, the date, and an optional PayPal reference. Choose **Record payment**. The app never calls PayPal. The date cannot be in the future.
 
 Nothing is stored as a running total. The app works out the balances from check-ins, membership dates, and payments each time the page loads. When you change a red day to green, that day's debts go away.
+
+## Dropout
+
+A member can leave. On the group card, pick the member and their last day, then choose **Record dropout**. You can record your own dropout. The person who made the group can record anyone's. The last day cannot be before the member joined or after today.
+
+Debts on days through the last day stay. The member who left still owes for their misses on those days, and others still owe them for theirs. Days after the last day create no debts for that member in either direction. Their calendar row stays, with blank days after the last day, and they cannot log those days.
+
+After a dropout the group can have fewer than 3 active members. The leaver no longer counts toward the cap of 5, so someone else can join.
 
 ## Check
 
