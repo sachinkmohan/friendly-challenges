@@ -1,5 +1,5 @@
 import type { Database } from './db.ts'
-import { ACTIVE_MEMBER_CAP, activeMemberIds, groupRef, parseGroup, readGroup, readUsers, utcToday, type GroupDoc } from './store.ts'
+import { ACTIVE_MEMBER_CAP, activeMemberIds, compare, groupRef, parseGroup, readGroup, readUsers, utcToday, type GroupDoc } from './store.ts'
 import type { Account } from './identity.ts'
 
 export type GroupId = string & { readonly brand: 'GroupId' }
@@ -150,8 +150,4 @@ export async function listHomeGroups(db: Database, account: Account): Promise<re
     if (active.includes(account.id)) groups.push({ groupId, name: group.name, activeCount: active.length })
   }
   return groups.sort((a, b) => compare(a.name, b.name) || compare(a.groupId, b.groupId))
-}
-
-export function compare(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0
 }
