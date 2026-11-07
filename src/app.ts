@@ -3,9 +3,19 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PGlite } from '@electric-sql/pglite'
 import { upsertAccount } from './accounts.ts'
 import { clearCookie, readCookie, secretsMatch, writeCookie } from './cookies.ts'
-import { createGroup, joinGroup, listHomeGroups, viewGroup } from './groups.ts'
+import {
+  readChallengeHeadline,
+  readMemberChallenge,
+  saveChallenge,
+  saveRhythm,
+  startChallenge,
+  type ChallengeFailure,
+  type ChallengeInput,
+  type RhythmInput,
+} from './challenge.ts'
+import { createGroup, joinGroup, listHomeGroups, viewGroup, type GroupId } from './groups.ts'
 import { authorizeUrl, exchangeCode, type GoogleConfig } from './google.ts'
-import type { AuthFailure, Viewer } from './identity.ts'
+import type { Account, AuthFailure, Viewer } from './identity.ts'
 import {
   groupHref,
   matchGroupPath,
@@ -198,13 +208,15 @@ async function handleGroup(
   }
   if (route.kind === 'show') {
     if (method !== 'GET') return rejectMethod(res, 'GET')
-    const account = viewer.state === 'signed_in' ? viewer.account : null
-    const view = await viewGroup(deps.db, account, route.groupId)
-    if (view.kind === 'missing') {
-      sendHtml(res, 404, renderMessage('Not found', 'That page does not exist.'))
+    if (viewer.state === 'signed_out') {
+      await sendGroupPage(res, 200, null, route.groupId, origin, deps)
       return
     }
-    sendHtml(res, 200, renderGroup(view, viewer, origin))
+    await sendMemberPage(res, 200, viewer.account, route.groupId, origin, deps)
+    return
+  }
+  if (route.kind === 'save_challenge' || route.kind === 'start_challenge' || route.kind === 'save_rhythm') {
+    await postChallenge(req, res, method, origin, route, viewer, deps)
     return
   }
   if (method !== 'POST') return rejectMethod(res, 'POST')
@@ -214,17 +226,7 @@ async function handleGroup(
       sendHtml(res, 404, renderMessage('Not found', 'That page does not exist.'))
       return
     }
-    if (view.kind === 'full') {
-      sendHtml(res, 409, renderGroup(view, viewer, origin))
-      return
-    }
-    const preview = {
-      kind: 'preview' as const,
-      groupId: view.groupId,
-      name: view.name,
-      activeCount: view.activeCount,
-    }
-    sendHtml(res, 401, renderGroup(preview, viewer, origin))
+    await sendGroupPage(res, view.kind === 'full' ? 409 : 401, null, route.groupId, origin, deps)
     return
   }
   const joined = await joinGroup(deps.db, viewer.account, route.groupId)
@@ -236,12 +238,178 @@ async function handleGroup(
     sendHtml(res, 404, renderMessage('Not found', 'That page does not exist.'))
     return
   }
-  const view = await viewGroup(deps.db, viewer.account, route.groupId)
+  await sendGroupPage(res, 409, viewer.account, route.groupId, origin, deps)
+}
+
+type ChallengeRoute = Extract<GroupRoute, { kind: 'save_challenge' | 'start_challenge' | 'save_rhythm' }>
+
+type ChallengeAttempt = {
+  failure?: ChallengeFailure
+  draft?: ChallengeInput
+  rhythmDraft?: RhythmInput
+}
+
+function challengeStatus(failure: ChallengeFailure): number {
+  if (failure === 'not_member') return 403
+  if (failure === 'group_missing') return 404
+  if (
+    failure === 'frozen' ||
+    failure === 'no_challenge' ||
+    failure === 'outside_headcount' ||
+    failure === 'rhythm_past_end'
+  ) {
+    return 409
+  }
+  return 400
+}
+
+function notFound(res: ServerResponse): void {
+  sendHtml(res, 404, renderMessage('Not found', 'That page does not exist.'))
+}
+
+async function sendGroupPage(
+  res: ServerResponse,
+  status: number,
+  account: Account | null,
+  groupId: GroupId,
+  origin: string,
+  deps: AppDeps,
+  attempt?: ChallengeAttempt,
+): Promise<void> {
+  const view = await viewGroup(deps.db, account, groupId)
   if (view.kind === 'missing') {
-    sendHtml(res, 404, renderMessage('Not found', 'That page does not exist.'))
+    notFound(res)
     return
   }
-  sendHtml(res, 409, renderGroup(view, viewer, origin))
+  if (view.kind === 'members') {
+    if (!account) {
+      notFound(res)
+      return
+    }
+    await sendMemberPage(res, status, account, groupId, origin, deps, attempt)
+    return
+  }
+  const headline = await readChallengeHeadline(deps.db, groupId)
+  const viewer: Viewer = account ? { state: 'signed_in', account } : { state: 'signed_out' }
+  sendHtml(res, status, renderGroup({ ...view, headline }, viewer, origin, attempt))
+}
+
+async function sendMemberPage(
+  res: ServerResponse,
+  status: number,
+  account: Account,
+  groupId: GroupId,
+  origin: string,
+  deps: AppDeps,
+  attempt?: ChallengeAttempt,
+): Promise<void> {
+  const viewer: Viewer = { state: 'signed_in', account }
+  const view = await viewGroup(deps.db, account, groupId)
+  if (view.kind === 'missing') {
+    notFound(res)
+    return
+  }
+  if (view.kind !== 'members') {
+    const headline = await readChallengeHeadline(deps.db, groupId)
+    sendHtml(res, status, renderGroup({ ...view, headline }, viewer, origin, attempt))
+    return
+  }
+  const loaded = await readMemberChallenge(deps.db, account, groupId)
+  if (!loaded.ok) {
+    const again = await viewGroup(deps.db, account, groupId)
+    if (again.kind === 'missing') {
+      notFound(res)
+      return
+    }
+    if (again.kind !== 'members') {
+      const headline = await readChallengeHeadline(deps.db, groupId)
+      sendHtml(res, status, renderGroup({ ...again, headline }, viewer, origin, attempt))
+      return
+    }
+    sendHtml(res, 500, renderMessage('Something went wrong', 'Try that again.'))
+    return
+  }
+  sendHtml(res, status, renderGroup({ ...view, challenge: loaded.card }, viewer, origin, attempt))
+}
+
+async function finishChallenge(
+  res: ServerResponse,
+  origin: string,
+  groupId: GroupId,
+  account: Account,
+  deps: AppDeps,
+  result: { ok: true } | { ok: false; failure: ChallengeFailure },
+  draft?: ChallengeInput,
+  rhythmDraft?: RhythmInput,
+): Promise<void> {
+  if (result.ok) {
+    sendRedirect(res, groupHref(groupId), [], 303)
+    return
+  }
+  if (result.failure === 'group_missing') {
+    notFound(res)
+    return
+  }
+  const status = challengeStatus(result.failure)
+  const attempt: ChallengeAttempt =
+    status === 409 ? { failure: result.failure } : { failure: result.failure, draft, rhythmDraft }
+  if (result.failure === 'not_member') {
+    await sendGroupPage(res, status, account, groupId, origin, deps, attempt)
+    return
+  }
+  await sendMemberPage(res, status, account, groupId, origin, deps, attempt)
+}
+
+async function postChallenge(
+  req: IncomingMessage,
+  res: ServerResponse,
+  method: string,
+  origin: string,
+  route: ChallengeRoute,
+  viewer: Viewer,
+  deps: AppDeps,
+): Promise<void> {
+  if (method !== 'POST') return rejectMethod(res, 'POST')
+  if (viewer.state === 'signed_out') {
+    req.resume()
+    await sendGroupPage(res, 401, null, route.groupId, origin, deps)
+    return
+  }
+  if (route.kind === 'start_challenge') {
+    req.resume()
+    const started = await startChallenge(deps.db, viewer.account, route.groupId)
+    await finishChallenge(res, origin, route.groupId, viewer.account, deps, started)
+    return
+  }
+  const form = await readForm(req)
+  if (form === 'too_large') {
+    sendHtml(res, 413, renderMessage('Something went wrong', 'Try that again.'))
+    return
+  }
+  if (form === 'bad_type') {
+    sendHtml(res, 400, renderMessage('Something went wrong', 'Try that again.'))
+    return
+  }
+  if (route.kind === 'save_challenge') {
+    const input: ChallengeInput = {
+      name: form.get('name') ?? '',
+      type: form.get('type') ?? '',
+      customLabel: form.get('custom_label') ?? '',
+      currency: form.get('currency') ?? '',
+      stake: form.get('stake') ?? '',
+      startsOn: form.get('starts_on') ?? '',
+      endsOn: form.get('ends_on') ?? '',
+    }
+    const saved = await saveChallenge(deps.db, viewer.account, route.groupId, input)
+    await finishChallenge(res, origin, route.groupId, viewer.account, deps, saved, input)
+    return
+  }
+  const rhythm: RhythmInput = {
+    interval: form.get('interval') ?? '',
+    anchorOn: form.get('anchor_on') ?? '',
+  }
+  const saved = await saveRhythm(deps.db, viewer.account, route.groupId, rhythm)
+  await finishChallenge(res, origin, route.groupId, viewer.account, deps, saved, undefined, rhythm)
 }
 
 async function readForm(req: IncomingMessage): Promise<URLSearchParams | 'too_large' | 'bad_type'> {

@@ -22,7 +22,9 @@ Signing in again with the same Google account updates that row. It does not crea
 
 Sign in. Choose **Create a group** and type a name. You are the first member. The group page shows the members, the active count, each join date, and an invite link.
 
-Open that link while signed in as someone else. Choose **Join group**. A sixth person cannot join. The page says the group is full. Leave dates stay empty. Starting a challenge comes later, and it needs 3 to 5 active members.
+Open that link while signed in as someone else. Choose **Join group**. A sixth person cannot join. The page says the group is full. Leave dates stay empty.
+
+On the group page, name the challenge, pick the type, the currency, and the stake per day. The stake is the amount in that currency, and the app stores the minor units. Each member picks how often they log and an anchor date. The choices are every day, every 2 days, every 3 days, and alternate days. **Start challenge** appears when 3 to 5 people are active. After the start, the shared terms stay as they are. A member who has not picked a rhythm can still save one. A saved rhythm stays put.
 
 ## Check
 

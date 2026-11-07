@@ -111,7 +111,7 @@ test('the creator is the first member and a second person can join', async () =>
     assert.match(rosterHtml, /Ada/)
     assert.match(rosterHtml, /https:\/\/lh3.googleusercontent.com\/a\/ada/)
     assert.match(rosterHtml, /<time datetime="\d{4}-\d{2}-\d{2}">/)
-    assert.match(rosterHtml, /A challenge can start later when 3 to 5 people are active/)
+    assert.match(rosterHtml, /A challenge can start when 3 to 5 people are active/)
     assert.match(rosterHtml, new RegExp(`${base}${groupPath}`))
     assert.doesNotMatch(rosterHtml, /left_on/)
 
