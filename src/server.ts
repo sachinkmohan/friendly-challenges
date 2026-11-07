@@ -1,7 +1,15 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { serve } from './handler.ts'
 
-const port = Number(process.env.PORT ?? 3000)
+const parsedPort = Number(process.env.PORT)
+const port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 3000
+
+process.on('uncaughtException', (error) => {
+  console.error(error)
+})
+process.on('unhandledRejection', (error) => {
+  console.error(error)
+})
 
 const server = createServer((req, res) => {
   void serve(req, res)
@@ -11,7 +19,10 @@ export default function handler(req: IncomingMessage, res: ServerResponse): Prom
   return serve(req, res)
 }
 
-if (process.env.VERCEL !== '1') {
-  process.env.USE_EMBEDDED_DB = '1'
+if ((process.env.DATABASE_URL?.trim() ?? '') === '') process.env.USE_EMBEDDED_DB = '1'
+
+try {
   server.listen(port)
+} catch (error) {
+  console.error(error)
 }
