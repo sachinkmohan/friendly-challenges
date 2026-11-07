@@ -1,6 +1,21 @@
+import { CURRENCY_CODES, minorDigitsOf } from './currencies.ts'
 import type { Database } from './db.ts'
 import type { Account } from './identity.ts'
 import type { GroupId } from './groups.ts'
+import {
+  ACTIVE_MEMBER_CAP,
+  activeMemberIds,
+  CHALLENGE_MEMBER_FLOOR,
+  compare,
+  groupRef,
+  memberOf,
+  readGroup,
+  rhythmOf,
+  type ChallengeDoc,
+  type GroupDoc,
+  type MemberDoc,
+  type RhythmDoc,
+} from './store.ts'
 
 export const STAKE_MINOR_MAX = 1_000_000_000
 
@@ -198,10 +213,6 @@ export type RhythmSlot =
   | { readonly mode: 'first' }
   | { readonly mode: 'locked'; readonly rhythm: Rhythm }
 
-type Sql = {
-  query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>
-}
-
 type StakeParts = { readonly whole: string; readonly frac: string | null }
 
 type ParsedChallenge = {
@@ -228,20 +239,6 @@ class CommandError extends Error {
   }
 }
 
-const CHALLENGE_SELECT = `
-  SELECT c.name,
-         c.type_kind,
-         c.custom_label,
-         btrim(c.currency) AS currency,
-         c.stake_minor,
-         to_char(c.starts_on, 'YYYY-MM-DD') AS starts_on,
-         to_char(c.ends_on, 'YYYY-MM-DD') AS ends_on,
-         c.phase,
-         k.minor_digits
-  FROM challenges c
-  LEFT JOIN currency_codes k ON k.code = c.currency
-`
-
 function codePointLength(value: string): number {
   return Array.from(value).length
 }
@@ -252,77 +249,6 @@ function isPreset(value: string): value is PresetKind {
 
 export function isRhythmKind(value: string): value is RhythmKind {
   return Object.prototype.hasOwnProperty.call(RHYTHM_STEP, value)
-}
-
-function isFailure(value: string): value is ChallengeFailure {
-  return Object.prototype.hasOwnProperty.call(challengeFailureCopy, value)
-}
-
-function readDbError(error: unknown): { code: string; message: string } | null {
-  if (!(error instanceof Error)) return null
-  const row = error as Error & { code?: unknown }
-  if (typeof row.code !== 'string') return null
-  return { code: row.code, message: error.message.trim() }
-}
-
-function failureFrom(error: unknown): ChallengeFailure | null {
-  if (error instanceof CommandError) return error.failure
-  const dbError = readDbError(error)
-  if (!dbError || dbError.code !== 'P0001' || !isFailure(dbError.message)) return null
-  return dbError.message
-}
-
-function dateFrom(value: unknown): IsoDate {
-  if (typeof value !== 'string') throw new Error('date')
-  const parsed = parseIsoDate(value)
-  if (!parsed) throw new Error('date')
-  return parsed
-}
-
-function currencyFrom(value: unknown): CurrencyCode {
-  if (typeof value !== 'string') throw new Error('currency')
-  const code = value.trim()
-  if (!CURRENCY_SHAPE.test(code)) throw new Error('currency')
-  return code as CurrencyCode
-}
-
-function integerFrom(value: unknown): number {
-  if (typeof value === 'number' && Number.isInteger(value)) return value
-  if (
-    typeof value === 'bigint' &&
-    value <= BigInt(Number.MAX_SAFE_INTEGER) &&
-    value >= BigInt(Number.MIN_SAFE_INTEGER)
-  ) {
-    return Number(value)
-  }
-  if (typeof value === 'string' && /^-?\d+$/.test(value)) {
-    const parsed = Number(value)
-    if (Number.isSafeInteger(parsed)) return parsed
-  }
-  throw new Error('integer')
-}
-
-function minorDigitsFrom(value: unknown): number {
-  const digits = integerFrom(value)
-  if (digits < 0 || digits > 4) throw new Error('minor digits')
-  return digits
-}
-
-function stakeFrom(value: unknown): StakeMinor {
-  const stake = integerFrom(value)
-  if (stake < 1 || stake > STAKE_MINOR_MAX) throw new Error('stake')
-  return stake as StakeMinor
-}
-
-function typeFrom(kind: unknown, label: unknown): ChallengeType {
-  if (kind === 'custom') {
-    if (typeof label !== 'string' || codePointLength(label.trim()) === 0 || codePointLength(label.trim()) > NAME_MAX) {
-      throw new Error('type')
-    }
-    return { kind: 'custom', label }
-  }
-  if (typeof kind === 'string' && isPreset(kind) && label === null) return { kind: 'preset', preset: kind }
-  throw new Error('type')
 }
 
 function utcOrdinal(day: IsoDate): number {
@@ -492,83 +418,100 @@ function sameTerms(left: ChallengeTerms, right: ChallengeTerms): boolean {
   )
 }
 
-function challengeFrom(row: Record<string, unknown>): StoredChallenge {
-  const phase = row.phase
-  if (phase !== 'draft' && phase !== 'active') throw new Error('phase')
-  if (typeof row.name !== 'string' || codePointLength(row.name.trim()) === 0) throw new Error('name')
+function dateFrom(value: string): IsoDate {
+  const parsed = parseIsoDate(value)
+  if (!parsed) throw new Error('date')
+  return parsed
+}
+
+function typeFrom(kind: string, label: string | null): ChallengeType {
+  if (kind === 'custom' && label !== null) return { kind: 'custom', label }
+  if (isPreset(kind) && label === null) return { kind: 'preset', preset: kind }
+  throw new Error('type')
+}
+
+function storedFrom(doc: ChallengeDoc): StoredChallenge {
+  const minorDigits = minorDigitsOf(doc.currency)
+  if (minorDigits === null) throw new Error('currency')
   return {
-    phase,
-    minorDigits: minorDigitsFrom(row.minor_digits),
+    phase: doc.phase,
+    minorDigits,
     terms: {
-      name: row.name,
-      type: typeFrom(row.type_kind, row.custom_label),
-      currency: currencyFrom(row.currency),
-      stakeMinor: stakeFrom(row.stake_minor),
-      startsOn: dateFrom(row.starts_on),
-      endsOn: dateFrom(row.ends_on),
+      name: doc.name,
+      type: typeFrom(doc.typeKind, doc.customLabel),
+      currency: doc.currency as CurrencyCode,
+      stakeMinor: doc.stakeMinor as StakeMinor,
+      startsOn: dateFrom(doc.startsOn),
+      endsOn: dateFrom(doc.endsOn),
     },
   }
 }
 
-async function loadChallenge(sql: Sql, groupId: GroupId, lock: 'update' | 'share' | 'none'): Promise<StoredChallenge | null> {
-  const clause = lock === 'update' ? 'FOR UPDATE OF c' : lock === 'share' ? 'FOR SHARE OF c' : ''
-  const result = await sql.query(`${CHALLENGE_SELECT} WHERE c.group_id = $1::uuid ${clause}`, [groupId])
-  const row = result.rows[0]
-  if (!row) return null
-  return challengeFrom(row)
+function challengeDoc(terms: ChallengeTerms, phase: 'draft' | 'active'): ChallengeDoc {
+  return {
+    name: terms.name,
+    typeKind: terms.type.kind === 'custom' ? 'custom' : terms.type.preset,
+    customLabel: terms.type.kind === 'custom' ? terms.type.label : null,
+    currency: terms.currency,
+    stakeMinor: terms.stakeMinor,
+    startsOn: terms.startsOn,
+    endsOn: terms.endsOn,
+    phase,
+  }
 }
 
-async function requireGroup(sql: Sql, groupId: GroupId, lock: boolean): Promise<void> {
-  const result = await sql.query(`SELECT 1 AS ok FROM groups WHERE id = $1::uuid ${lock ? 'FOR UPDATE' : ''}`, [groupId])
-  if (!result.rows[0]) throw new CommandError('group_missing')
+export function windowFrom(doc: ChallengeDoc | null): ChallengeWindow | null {
+  if (!doc) return null
+  return { phase: doc.phase, startsOn: dateFrom(doc.startsOn), endsOn: dateFrom(doc.endsOn) }
 }
 
-async function requireMember(sql: Sql, groupId: GroupId, userId: string): Promise<void> {
-  const result = await sql.query(`SELECT 1 AS ok FROM active_memberships WHERE group_id = $1::uuid AND user_id = $2::uuid`, [
-    groupId,
-    userId,
-  ])
-  if (!result.rows[0]) throw new CommandError('not_member')
+export function spanFrom(member: MemberDoc | null): MembershipSpan | null {
+  if (!member) return null
+  return { joinedOn: dateFrom(member.joinedOn), leftOn: member.leftOn === null ? null : dateFrom(member.leftOn) }
 }
 
-async function loadCurrencies(sql: Sql): Promise<readonly CurrencyCode[]> {
-  const result = await sql.query<{ code: string }>(`SELECT btrim(code) AS code FROM currency_codes ORDER BY code`)
-  return result.rows.map((row) => currencyFrom(row.code))
+export function rhythmFrom(doc: RhythmDoc | null): Rhythm | null {
+  if (!doc) return null
+  if (!isRhythmKind(doc.kind)) throw new Error('rhythm')
+  return { kind: doc.kind, anchorOn: dateFrom(doc.anchorOn) }
 }
 
-async function loadRhythms(sql: Sql, groupId: GroupId): Promise<readonly RhythmLine[]> {
-  const result = await sql.query<{ user_id: string; kind: string; anchor_on: string }>(
-    `SELECT user_id::text AS user_id, kind, to_char(anchor_on, 'YYYY-MM-DD') AS anchor_on
-     FROM logging_rhythms
-     WHERE group_id = $1::uuid
-     ORDER BY user_id`,
-    [groupId],
-  )
-  return result.rows.map((row) => {
-    if (!isRhythmKind(row.kind)) throw new Error('rhythm')
-    if (typeof row.user_id !== 'string' || row.user_id === '') throw new Error('rhythm user')
-    return { userId: row.user_id, kind: row.kind, anchorOn: dateFrom(row.anchor_on) }
-  })
+function rhythmLines(group: GroupDoc): readonly RhythmLine[] {
+  return Object.keys(group.rhythms)
+    .sort(compare)
+    .map((userId) => {
+      const rhythm = rhythmFrom(rhythmOf(group, userId))
+      if (!rhythm) throw new Error('rhythm')
+      return { userId, ...rhythm }
+    })
 }
 
-async function boundsFrom(sql: Sql): Promise<{ floor: number; cap: number }> {
-  const result = await sql.query<{ floor: number | string; cap: number | string }>(
-    `SELECT challenge_member_floor() AS floor, active_member_cap() AS cap`,
-  )
-  const row = result.rows[0]
-  if (!row) throw new Error('bounds')
-  const floor = integerFrom(row.floor)
-  const cap = integerFrom(row.cap)
-  if (floor < 1 || cap < floor) throw new Error('bounds')
-  return { floor, cap }
+function isActiveMember(group: GroupDoc, userId: string): boolean {
+  return memberOf(group, userId)?.leftOn === null
 }
 
-function labelOf(type: ChallengeType): string | null {
-  return type.kind === 'custom' ? type.label : null
-}
+// Every write reads the group document first, so writers to one group serialize on it and each rule sees the latest members, terms, and rhythms.
+type FailureOf<R> = R extends { readonly ok: false; readonly failure: infer F } ? F : never
 
-function kindOf(type: ChallengeType): string {
-  return type.kind === 'custom' ? 'custom' : type.preset
+async function changeGroup<R extends { readonly ok: boolean }>(
+  db: Database,
+  account: Account,
+  groupId: GroupId,
+  change: (group: GroupDoc) => { readonly [field: string]: unknown } | null,
+): Promise<{ readonly ok: true } | { readonly ok: false; readonly failure: FailureOf<R> }> {
+  try {
+    await db.runTransaction(async (tx) => {
+      const group = await readGroup(db, groupId, tx)
+      if (!group) throw new CommandError('group_missing')
+      if (!isActiveMember(group, account.id)) throw new CommandError('not_member')
+      const fields = change(group)
+      if (fields) tx.update(groupRef(db, groupId), fields)
+    })
+    return { ok: true }
+  } catch (error) {
+    if (error instanceof CommandError) return { ok: false, failure: error.failure as FailureOf<R> }
+    throw error
+  }
 }
 
 export async function saveChallenge(
@@ -579,111 +522,46 @@ export async function saveChallenge(
 ): Promise<SaveChallengeResult> {
   const parsed = parseChallengeInput(input)
   if (!parsed.ok) return parsed
-  try {
-    return await db.transaction(async (tx) => {
-      await requireGroup(tx, groupId, true)
-      await requireMember(tx, groupId, account.id)
-      const currency = await tx.query<{ minor_digits: number | string }>(
-        `SELECT minor_digits FROM currency_codes WHERE code = $1`,
-        [parsed.value.currency],
-      )
-      const digits = currency.rows[0]
-      if (!digits) throw new CommandError('bad_currency')
-      const scaled = scaleStake(parsed.value.stake, minorDigitsFrom(digits.minor_digits))
-      if (!scaled.ok) throw new CommandError(scaled.failure)
-      const terms: ChallengeTerms = {
-        name: parsed.value.name,
-        type: parsed.value.type,
-        currency: currencyFrom(parsed.value.currency),
-        stakeMinor: scaled.stakeMinor,
-        startsOn: parsed.value.startsOn,
-        endsOn: parsed.value.endsOn,
-      }
-      const existing = await loadChallenge(tx, groupId, 'update')
-      if (existing?.phase === 'active') {
-        if (sameTerms(existing.terms, terms)) return { ok: true }
-        throw new CommandError('frozen')
-      }
-      if (
-        existing?.phase === 'draft' &&
-        (existing.terms.startsOn !== terms.startsOn || existing.terms.endsOn !== terms.endsOn)
-      ) {
-        const blocked = await tx.query(
-          `SELECT 1 AS ok FROM logging_rhythms WHERE group_id = $1::uuid AND anchor_on > $2::date LIMIT 1`,
-          [groupId, terms.endsOn],
-        )
-        if (blocked.rows[0]) throw new CommandError('anchor_after_end')
-      }
-      const written = await tx.query(
-        `INSERT INTO challenges (
-           group_id, name, type_kind, custom_label, currency, stake_minor, starts_on, ends_on, phase
-         ) VALUES (
-           $1::uuid, $2, $3, $4, $5, $6, $7::date, $8::date, 'draft'
-         )
-         ON CONFLICT (group_id) DO UPDATE SET
-           name = EXCLUDED.name,
-           type_kind = EXCLUDED.type_kind,
-           custom_label = EXCLUDED.custom_label,
-           currency = EXCLUDED.currency,
-           stake_minor = EXCLUDED.stake_minor,
-           starts_on = EXCLUDED.starts_on,
-           ends_on = EXCLUDED.ends_on
-         WHERE challenges.phase = 'draft'
-         RETURNING group_id`,
-        [groupId, terms.name, kindOf(terms.type), labelOf(terms.type), terms.currency, terms.stakeMinor, terms.startsOn, terms.endsOn],
-      )
-      if (!written.rows[0]) {
-        const again = await loadChallenge(tx, groupId, 'update')
-        if (again && sameTerms(again.terms, terms)) return { ok: true }
-        throw new CommandError('frozen')
-      }
-      return { ok: true }
-    })
-  } catch (error) {
-    const failure = failureFrom(error)
-    if (failure === 'group_missing' || failure === 'not_member' || failure === 'frozen' || failure === 'anchor_after_end') {
-      return { ok: false, failure }
+  return changeGroup<SaveChallengeResult>(db, account, groupId, (group) => {
+    const minorDigits = minorDigitsOf(parsed.value.currency)
+    if (minorDigits === null) throw new CommandError('bad_currency')
+    const scaled = scaleStake(parsed.value.stake, minorDigits)
+    if (!scaled.ok) throw new CommandError(scaled.failure)
+    const terms: ChallengeTerms = {
+      name: parsed.value.name,
+      type: parsed.value.type,
+      currency: parsed.value.currency as CurrencyCode,
+      stakeMinor: scaled.stakeMinor,
+      startsOn: parsed.value.startsOn,
+      endsOn: parsed.value.endsOn,
     }
-    if (failure === 'bad_currency' || failure === 'stake_not_positive' || failure === 'stake_too_large') {
-      return { ok: false, failure }
+    const existing = group.challenge ? storedFrom(group.challenge) : null
+    if (existing?.phase === 'active') {
+      if (sameTerms(existing.terms, terms)) return null
+      throw new CommandError('frozen')
     }
-    throw error
-  }
+    const datesMoved = existing && (existing.terms.startsOn !== terms.startsOn || existing.terms.endsOn !== terms.endsOn)
+    if (datesMoved && Object.values(group.rhythms).some((rhythm) => rhythm.anchorOn > terms.endsOn)) {
+      throw new CommandError('anchor_after_end')
+    }
+    return { challenge: challengeDoc(terms, 'draft') }
+  })
 }
 
 export async function startChallenge(db: Database, account: Account, groupId: GroupId): Promise<StartChallengeResult> {
-  try {
-    return await db.transaction(async (tx) => {
-      await requireGroup(tx, groupId, true)
-      await requireMember(tx, groupId, account.id)
-      const existing = await loadChallenge(tx, groupId, 'update')
-      if (!existing) throw new CommandError('no_challenge')
-      if (existing.phase === 'active') return { ok: true }
-      const past = await tx.query(
-        `SELECT 1 AS ok
-         FROM logging_rhythms r
-         JOIN active_memberships a ON a.group_id = r.group_id AND a.user_id = r.user_id
-         WHERE r.group_id = $1::uuid AND r.anchor_on > $2::date
-         LIMIT 1`,
-        [groupId, existing.terms.endsOn],
-      )
-      if (past.rows[0]) throw new CommandError('rhythm_past_end')
-      await tx.query(`UPDATE challenges SET phase = 'active' WHERE group_id = $1::uuid AND phase = 'draft'`, [groupId])
-      return { ok: true }
-    })
-  } catch (error) {
-    const failure = failureFrom(error)
-    if (
-      failure === 'group_missing' ||
-      failure === 'not_member' ||
-      failure === 'no_challenge' ||
-      failure === 'outside_headcount' ||
-      failure === 'rhythm_past_end'
-    ) {
-      return { ok: false, failure }
+  return changeGroup<StartChallengeResult>(db, account, groupId, (group) => {
+    if (!group.challenge) throw new CommandError('no_challenge')
+    if (group.challenge.phase === 'active') return null
+    const endsOn = group.challenge.endsOn
+    const active = activeMemberIds(group)
+    if (active.some((userId) => (rhythmOf(group, userId)?.anchorOn ?? '') > endsOn)) {
+      throw new CommandError('rhythm_past_end')
     }
-    throw error
-  }
+    if (active.length < CHALLENGE_MEMBER_FLOOR || active.length > ACTIVE_MEMBER_CAP) {
+      throw new CommandError('outside_headcount')
+    }
+    return { 'challenge.phase': 'active' }
+  })
 }
 
 export async function saveRhythm(
@@ -695,99 +573,37 @@ export async function saveRhythm(
   if (!isRhythmKind(input.interval)) return { ok: false, failure: 'bad_interval' }
   const anchorOn = parseIsoDate(input.anchorOn)
   if (!anchorOn) return { ok: false, failure: 'bad_anchor' }
-  const kind: RhythmKind = input.interval
-  try {
-    return await db.transaction(async (tx) => {
-      await requireGroup(tx, groupId, false)
-      await requireMember(tx, groupId, account.id)
-      const existing = await loadChallenge(tx, groupId, 'share')
-      if (!existing) throw new CommandError('no_challenge')
-      if (anchorOn > existing.terms.endsOn) throw new CommandError('anchor_after_end')
-      const current = await tx.query<{ kind: string; anchor_on: string }>(
-        `SELECT kind, to_char(anchor_on, 'YYYY-MM-DD') AS anchor_on
-         FROM logging_rhythms
-         WHERE group_id = $1::uuid AND user_id = $2::uuid`,
-        [groupId, account.id],
-      )
-      const row = current.rows[0]
-      if (existing.phase === 'active' && row) {
-        if (row.kind === kind && row.anchor_on === anchorOn) return { ok: true }
-        throw new CommandError('frozen')
-      }
-      const written = await tx.query(
-        `INSERT INTO logging_rhythms (group_id, user_id, kind, anchor_on)
-         VALUES ($1::uuid, $2::uuid, $3, $4::date)
-         ON CONFLICT (group_id, user_id) DO UPDATE SET
-           kind = EXCLUDED.kind,
-           anchor_on = EXCLUDED.anchor_on
-         WHERE EXISTS (
-           SELECT 1 FROM challenges c
-           WHERE c.group_id = logging_rhythms.group_id AND c.phase = 'draft'
-         )
-         RETURNING group_id`,
-        [groupId, account.id, kind, anchorOn],
-      )
-      if (!written.rows[0]) {
-        const again = await tx.query<{ kind: string; anchor_on: string }>(
-          `SELECT kind, to_char(anchor_on, 'YYYY-MM-DD') AS anchor_on
-           FROM logging_rhythms
-           WHERE group_id = $1::uuid AND user_id = $2::uuid`,
-          [groupId, account.id],
-        )
-        const kept = again.rows[0]
-        if (kept && kept.kind === kind && kept.anchor_on === anchorOn) return { ok: true }
-        throw new CommandError('frozen')
-      }
-      return { ok: true }
-    })
-  } catch (error) {
-    const failure = failureFrom(error)
-    if (
-      failure === 'group_missing' ||
-      failure === 'not_member' ||
-      failure === 'no_challenge' ||
-      failure === 'anchor_after_end' ||
-      failure === 'frozen'
-    ) {
-      return { ok: false, failure }
+  const rhythm: RhythmDoc = { kind: input.interval, anchorOn }
+  return changeGroup<SaveRhythmResult>(db, account, groupId, (group) => {
+    if (!group.challenge) throw new CommandError('no_challenge')
+    if (anchorOn > group.challenge.endsOn) throw new CommandError('anchor_after_end')
+    const current = rhythmOf(group, account.id)
+    if (group.challenge.phase === 'active' && current) {
+      if (current.kind === rhythm.kind && current.anchorOn === rhythm.anchorOn) return null
+      throw new CommandError('frozen')
     }
-    throw error
-  }
+    return { [`rhythms.${account.id}`]: rhythm }
+  })
 }
 
 export async function readChallengeHeadline(db: Database, groupId: GroupId): Promise<ChallengeHeadline | null> {
-  const stored = await loadChallenge(db, groupId, 'none')
-  if (!stored) return null
+  const group = await readGroup(db, groupId)
+  if (!group?.challenge) return null
+  const stored = storedFrom(group.challenge)
   return { terms: stored.terms, minorDigits: stored.minorDigits }
 }
 
 export async function readMemberChallenge(db: Database, account: Account, groupId: GroupId): Promise<ReadChallengeResult> {
-  const group = await db.query(`SELECT 1 AS ok FROM groups WHERE id = $1::uuid`, [groupId])
-  if (!group.rows[0]) return { ok: false, failure: 'group_missing' }
-  const member = await db.query(`SELECT 1 AS ok FROM active_memberships WHERE group_id = $1::uuid AND user_id = $2::uuid`, [
-    groupId,
-    account.id,
-  ])
-  if (!member.rows[0]) return { ok: false, failure: 'not_member' }
-  const stored = await loadChallenge(db, groupId, 'none')
-  if (!stored) {
-    const bounds = await boundsFrom(db)
-    return { ok: true, card: { phase: 'unopened', ...bounds, currencies: await loadCurrencies(db) } }
-  }
-  const rhythms = await loadRhythms(db, groupId)
+  const group = await readGroup(db, groupId)
+  if (!group) return { ok: false, failure: 'group_missing' }
+  if (!isActiveMember(group, account.id)) return { ok: false, failure: 'not_member' }
+  const bounds = { floor: CHALLENGE_MEMBER_FLOOR, cap: ACTIVE_MEMBER_CAP }
+  const currencies = CURRENCY_CODES as readonly CurrencyCode[]
+  if (!group.challenge) return { ok: true, card: { phase: 'unopened', ...bounds, currencies } }
+  const stored = storedFrom(group.challenge)
+  const rhythms = rhythmLines(group)
   if (stored.phase === 'draft') {
-    const bounds = await boundsFrom(db)
-    return {
-      ok: true,
-      card: {
-        phase: 'draft',
-        terms: stored.terms,
-        minorDigits: stored.minorDigits,
-        ...bounds,
-        currencies: await loadCurrencies(db),
-        rhythms,
-      },
-    }
+    return { ok: true, card: { phase: 'draft', terms: stored.terms, minorDigits: stored.minorDigits, ...bounds, currencies, rhythms } }
   }
   return { ok: true, card: { phase: 'active', terms: stored.terms, minorDigits: stored.minorDigits, rhythms } }
 }

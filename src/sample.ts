@@ -1,6 +1,6 @@
-import type { DocumentReference } from 'firebase-admin/firestore'
+import { Timestamp, type DocumentReference } from 'firebase-admin/firestore'
 import type { Database } from './db.ts'
-import { checkInRef, groupRef, userRef, type CheckInDoc, type GroupDoc, type PaymentDoc } from './store.ts'
+import { checkInRef, groupRef, paymentRef, userRef, type CheckInDoc, type GroupDoc, type PaymentDoc } from './store.ts'
 
 // Expected open debt as of 2026-10-08, in minor units: 160
 export const SAMPLE_OPEN_DEBT_MINOR = 160
@@ -66,6 +66,7 @@ const payment: PaymentDoc = {
   currency: 'USD',
   paidOn: '2026-10-06',
   paypalRef: 'SAMPLE',
+  createdAt: Timestamp.fromDate(new Date('2026-10-06T12:00:00Z')),
 }
 
 // Writes only documents that are missing, so a second load leaves any later change in place.
@@ -77,7 +78,7 @@ export async function loadSample(db: Database): Promise<void> {
     ]),
     [groupRef(db, SAMPLE_GROUP_ID), pantry],
     ...checkIns.map((row): [DocumentReference, object] => [checkInRef(db, SAMPLE_GROUP_ID, row.userId, row.day), row]),
-    [groupRef(db, SAMPLE_GROUP_ID).collection('payments').doc(PAYMENT_ID), payment],
+    [paymentRef(db, SAMPLE_GROUP_ID, PAYMENT_ID), payment],
   ]
   await db.runTransaction(async (tx) => {
     const found = await tx.getAll(...docs.map(([ref]) => ref))

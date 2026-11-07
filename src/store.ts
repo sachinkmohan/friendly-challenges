@@ -1,4 +1,4 @@
-import type { DocumentReference, DocumentSnapshot, Transaction } from 'firebase-admin/firestore'
+import { Timestamp, type DocumentReference, type DocumentSnapshot, type Transaction } from 'firebase-admin/firestore'
 import type { Database } from './db.ts'
 import type { GroupId } from './groups.ts'
 
@@ -63,7 +63,10 @@ export type PaymentDoc = {
   readonly currency: string
   readonly paidOn: Day
   readonly paypalRef: string | null
+  readonly createdAt: Timestamp
 }
+
+export type PaymentRow = PaymentDoc & { readonly id: string }
 
 export const ACTIVE_MEMBER_CAP = 5
 export const CHALLENGE_MEMBER_FLOOR = 3
@@ -83,6 +86,10 @@ function text(value: unknown, what: string): string {
 function day(value: unknown, what: string): Day {
   if (typeof value !== 'string' || !DAY.test(value)) throw new Error(what)
   return value
+}
+
+function fail(what: string): never {
+  throw new Error(what)
 }
 
 function nullable<T>(value: unknown, read: (value: unknown) => T): T | null {
@@ -158,11 +165,25 @@ export function parsePayment(raw: unknown): PaymentDoc {
     currency: text(row.currency, 'payment currency'),
     paidOn: day(row.paidOn, 'payment day'),
     paypalRef: nullable(row.paypalRef, (v) => text(v, 'payment reference')),
+    createdAt: row.createdAt instanceof Timestamp ? row.createdAt : fail('payment created'),
   }
 }
 
 export function isActive(member: MemberDoc): boolean {
   return member.leftOn === null
+}
+
+// Map keys come from user input on some paths, so only own keys count, never `constructor` and the like.
+function own<T>(map: { readonly [key: string]: T }, key: string): T | null {
+  return Object.hasOwn(map, key) ? map[key]! : null
+}
+
+export function memberOf(group: GroupDoc, userId: string): MemberDoc | null {
+  return own(group.members, userId)
+}
+
+export function rhythmOf(group: GroupDoc, userId: string): RhythmDoc | null {
+  return own(group.rhythms, userId)
 }
 
 export function activeMemberIds(group: GroupDoc): string[] {
@@ -208,9 +229,13 @@ export async function readCheckIns(db: Database, groupId: GroupId | string): Pro
   return snapshot.docs.map((doc) => parseCheckIn(doc.data()))
 }
 
-export async function readPayments(db: Database, groupId: GroupId | string): Promise<PaymentDoc[]> {
+export function paymentRef(db: Database, groupId: GroupId | string, paymentId: string): DocumentReference {
+  return groupRef(db, groupId).collection('payments').doc(paymentId)
+}
+
+export async function readPayments(db: Database, groupId: GroupId | string): Promise<PaymentRow[]> {
   const snapshot = await groupRef(db, groupId).collection('payments').get()
-  return snapshot.docs.map((doc) => parsePayment(doc.data()))
+  return snapshot.docs.map((doc) => ({ id: doc.id, ...parsePayment(doc.data()) }))
 }
 
 export async function countDocs(db: Database, collection: string): Promise<number> {
