@@ -1,4 +1,4 @@
-import type { PGlite } from '@electric-sql/pglite'
+import type { Database } from './hosted-db.ts'
 import type { Account, GoogleIdentity } from './identity.ts'
 
 type AccountRow = {
@@ -23,7 +23,7 @@ function toAccount(row: AccountRow): Account {
   }
 }
 
-export async function upsertAccount(db: PGlite, identity: GoogleIdentity): Promise<UpsertResult> {
+export async function upsertAccount(db: Database, identity: GoogleIdentity): Promise<UpsertResult> {
   if (!identity.emailVerified || identity.sub === '' || identity.email === '') {
     return { ok: false, failure: 'unverified_email' }
   }
@@ -43,7 +43,7 @@ export async function upsertAccount(db: PGlite, identity: GoogleIdentity): Promi
   return { ok: true, account: toAccount(row) }
 }
 
-export async function countUsers(db: PGlite): Promise<number> {
+export async function countUsers(db: Database): Promise<number> {
   const result = await db.query<{ count: number }>('SELECT count(*)::int AS count FROM users')
   return Number(result.rows[0]?.count ?? 0)
 }

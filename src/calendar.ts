@@ -1,4 +1,4 @@
-import type { PGlite } from '@electric-sql/pglite'
+import type { Database } from './hosted-db.ts'
 import {
   isRhythmKind,
   memberIsDue,
@@ -156,7 +156,7 @@ function dateFrom(value: unknown): IsoDate {
   return parsed
 }
 
-export async function listHeatmaps(db: PGlite, account: Account, today: IsoDate): Promise<readonly Heatmap[]> {
+export async function listHeatmaps(db: Database, account: Account, today: IsoDate): Promise<readonly Heatmap[]> {
   const groups = await db.query<HeatmapRow>(
     `SELECT g.id::text AS group_id,
             g.name,

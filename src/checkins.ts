@@ -1,4 +1,4 @@
-import type { PGlite } from '@electric-sql/pglite'
+import type { Database } from './hosted-db.ts'
 import {
   isRhythmKind,
   memberIsDue,
@@ -118,7 +118,7 @@ async function loadRhythm(sql: Sql, groupId: GroupId, userId: string): Promise<R
 }
 
 export async function logCheckIn(
-  db: PGlite,
+  db: Database,
   account: Account,
   groupId: GroupId,
   input: CheckInInput,
@@ -151,7 +151,7 @@ export async function logCheckIn(
   }
 }
 
-export async function listCheckIns(db: PGlite, groupId: GroupId): Promise<readonly CheckIn[]> {
+export async function listCheckIns(db: Database, groupId: GroupId): Promise<readonly CheckIn[]> {
   const result = await db.query<{ user_id: string; display_name: string; day: string; color: string }>(
     `SELECT k.user_id::text AS user_id, u.display_name, to_char(k.day, 'YYYY-MM-DD') AS day, k.color
      FROM check_ins k

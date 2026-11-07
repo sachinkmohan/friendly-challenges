@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { PGlite } from '@electric-sql/pglite'
+import type { Database } from './hosted-db.ts'
 import { upsertAccount } from './accounts.ts'
 import { readLedger, recordPayment, type PaymentFailure, type PaymentInput } from './balances.ts'
 import { clearCookie, readCookie, secretsMatch, writeCookie } from './cookies.ts'
@@ -43,7 +43,7 @@ const SESSION_MAX_AGE = 60 * 60 * 24 * 30
 const FORM_LIMIT_BYTES = 4096
 
 export type AppDeps = {
-  db: PGlite
+  db: Database
   config: GoogleConfig
   fetch?: typeof fetch
   today?: () => IsoDate
@@ -51,8 +51,11 @@ export type AppDeps = {
 
 function requestOrigin(req: IncomingMessage): string {
   const host = req.headers.host ?? 'localhost'
+  const forwarded = req.headers['x-forwarded-proto']
+  const header = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim()
   const encrypted = Boolean((req.socket as { encrypted?: boolean }).encrypted)
-  return `${encrypted ? 'https' : 'http'}://${host}`
+  const proto = header === 'https' || header === 'http' ? header : encrypted ? 'https' : 'http'
+  return `${proto}://${host}`
 }
 
 function redirectUri(origin: string): string {
@@ -77,7 +80,7 @@ function sendRedirect(res: ServerResponse, location: string, cookies: string[] =
   res.end()
 }
 
-async function viewerFrom(req: IncomingMessage, db: PGlite): Promise<Viewer> {
+async function viewerFrom(req: IncomingMessage, db: Database): Promise<Viewer> {
   const token = readCookie(req.headers.cookie, SESSION_COOKIE)
   const account = await accountForSession(db, token)
   if (!account) return { state: 'signed_out' }

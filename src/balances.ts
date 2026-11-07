@@ -1,4 +1,4 @@
-import type { PGlite } from '@electric-sql/pglite'
+import type { Database } from './hosted-db.ts'
 import { buildCalendar, type CalendarMember, type CalendarSpan, type GroupCalendar } from './calendar.ts'
 import {
   isRhythmKind,
@@ -238,7 +238,7 @@ async function loadActiveTerms(sql: Sql, groupId: GroupId, lock: boolean): Promi
   }
 }
 
-async function loadMembers(db: PGlite, groupId: GroupId): Promise<readonly CalendarMember[]> {
+async function loadMembers(db: Database, groupId: GroupId): Promise<readonly CalendarMember[]> {
   const people = await db.query<Record<string, unknown>>(
     `SELECT m.user_id::text AS user_id, u.display_name,
             to_char(m.joined_on, 'YYYY-MM-DD') AS joined_on, to_char(m.left_on, 'YYYY-MM-DD') AS left_on,
@@ -279,7 +279,7 @@ async function loadMembers(db: PGlite, groupId: GroupId): Promise<readonly Calen
   })
 }
 
-async function loadPayments(db: PGlite, groupId: GroupId): Promise<readonly Payment[]> {
+async function loadPayments(db: Database, groupId: GroupId): Promise<readonly Payment[]> {
   const result = await db.query<Record<string, unknown>>(
     `SELECT p.id::text AS id, p.payer_id::text AS payer_id, payer.display_name AS payer_name,
             p.payee_id::text AS payee_id, payee.display_name AS payee_name,
@@ -307,7 +307,7 @@ async function loadPayments(db: PGlite, groupId: GroupId): Promise<readonly Paym
 
 // Nets are recomputed from check-ins, membership dates, and payments on every read. Nothing is cached.
 // The calendar rows come from every membership, so a member who left keeps their row and their debts.
-export async function readLedger(db: PGlite, groupId: GroupId, today: IsoDate): Promise<Ledger | null> {
+export async function readLedger(db: Database, groupId: GroupId, today: IsoDate): Promise<Ledger | null> {
   const terms = await loadActiveTerms(db, groupId, false)
   if (!terms) return null
   const members = await loadMembers(db, groupId)
@@ -334,7 +334,7 @@ function parsePaypalRef(raw: string): { ok: true; ref: string | null } | { ok: f
 }
 
 export async function recordPayment(
-  db: PGlite,
+  db: Database,
   account: Account,
   groupId: GroupId,
   input: PaymentInput,

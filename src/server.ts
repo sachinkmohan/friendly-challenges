@@ -1,24 +1,18 @@
-import { createServer } from 'node:http'
-import { createApp } from './app.ts'
-import { openDatabase } from './db.ts'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { serve } from './handler.ts'
 
-const port = Number(process.env.PORT ?? 3000)
-const dataDir = process.env.DATA_DIR ?? './data'
-const db = await openDatabase(dataDir)
-const app = createApp({
-  db,
-  config: {
-    clientId: process.env.GOOGLE_CLIENT_ID ?? '',
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
-  },
-})
+const parsedPort = Number(process.env.PORT)
+const port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 3000
 
 const server = createServer((req, res) => {
-  void app(req, res)
+  void serve(req, res)
 })
 
-server.listen(port, '127.0.0.1', () => {
-  const origin = process.env.APP_ORIGIN ?? `http://127.0.0.1:${port}`
-  console.log(`Friendly challenges at ${origin}`)
-  console.log(`Google redirect URI: ${origin}/auth/google/callback`)
+export default function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  return serve(req, res)
+}
+
+server.on('error', (error) => {
+  console.error(error)
 })
+server.listen(port)

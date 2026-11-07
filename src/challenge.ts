@@ -1,4 +1,4 @@
-import type { PGlite } from '@electric-sql/pglite'
+import type { Database } from './hosted-db.ts'
 import type { Account } from './identity.ts'
 import type { GroupId } from './groups.ts'
 
@@ -572,7 +572,7 @@ function kindOf(type: ChallengeType): string {
 }
 
 export async function saveChallenge(
-  db: PGlite,
+  db: Database,
   account: Account,
   groupId: GroupId,
   input: ChallengeInput,
@@ -651,7 +651,7 @@ export async function saveChallenge(
   }
 }
 
-export async function startChallenge(db: PGlite, account: Account, groupId: GroupId): Promise<StartChallengeResult> {
+export async function startChallenge(db: Database, account: Account, groupId: GroupId): Promise<StartChallengeResult> {
   try {
     return await db.transaction(async (tx) => {
       await requireGroup(tx, groupId, true)
@@ -687,7 +687,7 @@ export async function startChallenge(db: PGlite, account: Account, groupId: Grou
 }
 
 export async function saveRhythm(
-  db: PGlite,
+  db: Database,
   account: Account,
   groupId: GroupId,
   input: RhythmInput,
@@ -755,13 +755,13 @@ export async function saveRhythm(
   }
 }
 
-export async function readChallengeHeadline(db: PGlite, groupId: GroupId): Promise<ChallengeHeadline | null> {
+export async function readChallengeHeadline(db: Database, groupId: GroupId): Promise<ChallengeHeadline | null> {
   const stored = await loadChallenge(db, groupId, 'none')
   if (!stored) return null
   return { terms: stored.terms, minorDigits: stored.minorDigits }
 }
 
-export async function readMemberChallenge(db: PGlite, account: Account, groupId: GroupId): Promise<ReadChallengeResult> {
+export async function readMemberChallenge(db: Database, account: Account, groupId: GroupId): Promise<ReadChallengeResult> {
   const group = await db.query(`SELECT 1 AS ok FROM groups WHERE id = $1::uuid`, [groupId])
   if (!group.rows[0]) return { ok: false, failure: 'group_missing' }
   const member = await db.query(`SELECT 1 AS ok FROM active_memberships WHERE group_id = $1::uuid AND user_id = $2::uuid`, [
