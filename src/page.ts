@@ -57,6 +57,7 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#fffdf8">
   <title>Friendly challenges</title>
   <style>
     * { box-sizing: border-box; }
@@ -311,6 +312,12 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
       opacity: 0.35;
     }
     :focus-visible { outline: 2px solid #1c1915; outline-offset: 2px; }
+    @media (max-width: 500px), (max-height: 500px) {
+      body { background: #efeae1; }
+      .device { width: 100%; height: 100dvh; padding: 0; border-radius: 0; box-shadow: none; }
+      .phone { border-radius: 0; }
+      .indicator { display: none; }
+    }
   </style>
 </head>
 <body>
