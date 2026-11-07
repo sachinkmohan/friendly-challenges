@@ -54,6 +54,10 @@ Debts on days through the last day stay. The member who left still owes for thei
 
 After a dropout the group can have fewer than 3 active members. The leaver no longer counts toward the cap of 5, so someone else can join.
 
+## Sample
+
+A new database loads one group named Pantry. Ada, Bea, and Cam share a no-sugar challenge. They log on different intervals. The days include green and red check-ins, and Ada has recorded one payment to Cam. The comment at the top of `db/sample.sql` states the open debt in minor units. The balance on that group matches the comment.
+
 ## Check
 
 ```bash

@@ -1,4 +1,4 @@
-import type { PGlite } from '@electric-sql/pglite'
+import type { Database } from './db.ts'
 import { parseIsoDate, type IsoDate } from './challenge.ts'
 import type { GroupId } from './groups.ts'
 import type { Account } from './identity.ts'
@@ -39,7 +39,7 @@ class DropoutRejected extends Error {
 }
 
 export async function recordDropout(
-  db: PGlite,
+  db: Database,
   actor: Account,
   groupId: GroupId,
   input: DropoutInput,

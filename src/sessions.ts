@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import type { PGlite } from '@electric-sql/pglite'
+import type { Database } from './db.ts'
 import type { Account } from './identity.ts'
 
 type AccountRow = {
@@ -21,7 +21,7 @@ function sessionId(token: string): string {
   return createHash('sha256').update(token).digest('hex')
 }
 
-export async function createSession(db: PGlite, userId: string): Promise<string> {
+export async function createSession(db: Database, userId: string): Promise<string> {
   const token = newSessionToken()
   await db.query(
     `INSERT INTO sessions (id, user_id, expires_at)
@@ -31,7 +31,7 @@ export async function createSession(db: PGlite, userId: string): Promise<string>
   return token
 }
 
-export async function accountForSession(db: PGlite, token: string | null): Promise<Account | null> {
+export async function accountForSession(db: Database, token: string | null): Promise<Account | null> {
   if (!token) return null
   const id = sessionId(token)
   const result = await db.query<AccountRow>(
@@ -55,12 +55,12 @@ export async function accountForSession(db: PGlite, token: string | null): Promi
   }
 }
 
-export async function deleteSession(db: PGlite, token: string | null): Promise<void> {
+export async function deleteSession(db: Database, token: string | null): Promise<void> {
   if (!token) return
   await db.query('DELETE FROM sessions WHERE id = $1', [sessionId(token)])
 }
 
-export async function countSessions(db: PGlite): Promise<number> {
+export async function countSessions(db: Database): Promise<number> {
   const result = await db.query<{ count: number }>('SELECT count(*)::int AS count FROM sessions')
   return Number(result.rows[0]?.count ?? 0)
 }

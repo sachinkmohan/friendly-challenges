@@ -1,4 +1,4 @@
-import type { PGlite } from '@electric-sql/pglite'
+import type { Database } from './db.ts'
 import type { Account } from './identity.ts'
 
 export type GroupId = string & { readonly brand: 'GroupId' }
@@ -135,7 +135,7 @@ function parseMembers(raw: unknown): readonly MemberLine[] {
 }
 
 export async function createGroup(
-  db: PGlite,
+  db: Database,
   account: Account,
   rawName: string,
 ): Promise<CreateGroupResult> {
@@ -165,7 +165,7 @@ export async function createGroup(
   }
 }
 
-export async function joinGroup(db: PGlite, account: Account, groupId: GroupId): Promise<JoinResult> {
+export async function joinGroup(db: Database, account: Account, groupId: GroupId): Promise<JoinResult> {
   try {
     await db.query(
       `INSERT INTO memberships (group_id, user_id, joined_on)
@@ -188,7 +188,7 @@ export async function joinGroup(db: PGlite, account: Account, groupId: GroupId):
 }
 
 export async function viewGroup(
-  db: PGlite,
+  db: Database,
   account: Account | null,
   groupId: GroupId,
 ): Promise<GroupView> {
@@ -238,7 +238,7 @@ export async function viewGroup(
   return { kind: 'preview', groupId, name: row.name, activeCount }
 }
 
-export async function listHomeGroups(db: PGlite, account: Account): Promise<readonly HomeGroup[]> {
+export async function listHomeGroups(db: Database, account: Account): Promise<readonly HomeGroup[]> {
   const result = await db.query<HomeRow>(
     `SELECT g.id::text AS id,
             g.name,
