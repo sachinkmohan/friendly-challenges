@@ -28,12 +28,11 @@ function openOnce() {
 }
 
 async function openApp(): Promise<App> {
-  const databaseUrl = process.env.DATABASE_URL?.trim() ?? ''
-  if (databaseUrl === '') throw new Error('The database is not configured.')
-  const { openPostgres, prepareDatabase } = await import('./hosted-db.ts')
+  const { openDatabase } = await import('./db.ts')
+  const { loadSample } = await import('./sample.ts')
   const { createApp } = await import('./app.ts')
-  const db = openPostgres(databaseUrl)
-  await prepareDatabase(db)
+  const db = openDatabase()
+  await loadSample(db)
   const port = process.env.PORT ?? '3000'
   const origin = process.env.APP_ORIGIN ?? `http://127.0.0.1:${port}`
   console.log(`Friendly challenges at ${origin}`)

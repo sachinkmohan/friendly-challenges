@@ -1,4 +1,4 @@
-import type { Database } from './hosted-db.ts'
+import type { Database } from './db.ts'
 import {
   isRhythmKind,
   memberIsDue,

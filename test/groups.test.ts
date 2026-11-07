@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict'
-import { readdirSync, readFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { test } from 'node:test'
 import type { AddressInfo } from 'node:net'
-import type { PGlite } from '@electric-sql/pglite'
 import { upsertAccount } from '../src/accounts.ts'
 import { createApp } from '../src/app.ts'
-import { openDatabase } from '../src/db.ts'
+import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
+import { countDocs, readGroup, utcToday } from '../src/store.ts'
 import { createSession } from '../src/sessions.ts'
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token'
@@ -39,7 +38,7 @@ function googleFetch() {
   }) as typeof fetch
 }
 
-async function sessionFor(db: PGlite, name: string, avatarUrl: string | null = null): Promise<Person> {
+async function sessionFor(db: Database, name: string, avatarUrl: string | null = null): Promise<Person> {
   const saved = await upsertAccount(db, {
     sub: `sub-${name}`,
     email: `${name.replaceAll(' ', '-').toLowerCase()}@example.com`,
@@ -52,7 +51,7 @@ async function sessionFor(db: PGlite, name: string, avatarUrl: string | null = n
   return { cookie: `session=${encodeURIComponent(token)}`, userId: saved.account.id }
 }
 
-async function listen(db: PGlite, fetchImpl?: typeof fetch) {
+async function listen(db: Database, fetchImpl?: typeof fetch) {
   const app = createApp({
     db,
     config: { clientId: 'client-id', clientSecret: 'client-secret' },
@@ -66,9 +65,9 @@ async function listen(db: PGlite, fetchImpl?: typeof fetch) {
   return { server, base: `http://127.0.0.1:${address.port}` }
 }
 
-async function close(server: Server, db: PGlite) {
+async function close(server: Server, db: Database) {
   await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
-  await db.close()
+  await closeDatabase(db)
 }
 
 function cookiesFrom(response: Response): string {
@@ -77,9 +76,16 @@ function cookiesFrom(response: Response): string {
   return set.map((line) => line.split(';')[0]).join('; ')
 }
 
-async function countRows(db: PGlite, table: 'groups' | 'memberships'): Promise<number> {
-  const result = await db.query<{ count: number }>(`SELECT count(*)::int AS count FROM ${table}`)
-  return Number(result.rows[0]?.count ?? 0)
+async function countRows(db: Database, table: 'groups' | 'memberships'): Promise<number> {
+  if (table === 'groups') return countDocs(db, 'groups')
+  const groups = await db.collection('groups').get()
+  return groups.docs.reduce((sum, doc) => sum + Object.keys(doc.data().members ?? {}).length, 0)
+}
+
+async function members(db: Database, groupId: string) {
+  const group = await readGroup(db, groupId)
+  assert.ok(group)
+  return Object.values(group.members)
 }
 
 async function postForm(base: string, path: string, cookie: string | null, body?: string) {
@@ -95,7 +101,7 @@ async function postForm(base: string, path: string, cookie: string | null, body?
 }
 
 test('the creator is the first member and a second person can join', async () => {
-  const db = await openDatabase()
+  const db = openTestDatabase()
   const ada = await sessionFor(db, 'Ada', 'https://lh3.googleusercontent.com/a/ada')
   const grace = await sessionFor(db, 'Grace', 'javascript:alert(1)')
   const { server, base } = await listen(db)
@@ -132,15 +138,10 @@ test('the creator is the first member and a second person can join', async () =>
     assert.equal(joined.headers.get('location'), groupPath)
     const again = await postForm(base, `${groupPath}/join`, grace.cookie)
     assert.equal(again.status, 303)
-    const dates = await db.query<{ n: number; same: boolean; still_here: boolean }>(
-      `SELECT count(*)::int AS n,
-              bool_and(joined_on = (now() AT TIME ZONE 'utc')::date) AS same,
-              bool_and(left_on IS NULL) AS still_here
-       FROM memberships`,
-    )
-    assert.equal(dates.rows[0]?.n, 2)
-    assert.equal(dates.rows[0]?.same, true)
-    assert.equal(dates.rows[0]?.still_here, true)
+    const dates = await members(db, groupPath.slice('/groups/'.length))
+    assert.equal(dates.length, 2)
+    assert.ok(dates.every((member) => member.joinedOn === utcToday()))
+    assert.ok(dates.every((member) => member.leftOn === null))
     const both = await (await fetch(`${base}${groupPath}`, { headers: { cookie: ada.cookie } })).text()
     assert.match(both, /2 active/)
     assert.match(both, /Grace/)
@@ -160,7 +161,7 @@ test('the creator is the first member and a second person can join', async () =>
 })
 
 test('a sixth active member is rejected by the database', async () => {
-  const db = await openDatabase()
+  const db = openTestDatabase()
   const people = await Promise.all([0, 1, 2, 3, 4, 5].map((n) => sessionFor(db, `Person ${n}`)))
   const { server, base } = await listen(db)
   try {
@@ -184,46 +185,40 @@ test('a sixth active member is rejected by the database', async () => {
     const stillIn = await (await fetch(`${base}${groupPath}`, { headers: { cookie: people[0].cookie } })).text()
     assert.match(stillIn, /Person 0/)
     assert.match(stillIn, /5 active/)
-    const groupId = groupPath.slice('/groups/'.length)
-    await assert.rejects(
-      db.query(
-        `INSERT INTO memberships (group_id, user_id, joined_on)
-         VALUES ($1, $2, (now() AT TIME ZONE 'utc')::date)`,
-        [groupId, people[5].userId],
-      ),
-      (error: unknown) => {
-        assert.ok(error instanceof Error)
-        assert.equal((error as { code?: string }).code, 'P0001')
-        assert.equal(error.message, 'group_full')
-        return true
-      },
-    )
     const anonFull = await postForm(base, `${groupPath}/join`, null)
     assert.equal(anonFull.status, 409)
     const anonFullHtml = await anonFull.text()
     assert.match(anonFullHtml, /This group is full/)
     assert.doesNotMatch(anonFullHtml, /<form/)
-    const active = await db.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM memberships WHERE group_id = $1 AND left_on IS NULL`,
-      [groupId],
+    const groupId = groupPath.slice('/groups/'.length)
+    assert.equal((await members(db, groupId)).filter((member) => member.leftOn === null).length, 5)
+  } finally {
+    await close(server, db)
+  }
+})
+
+test('six people joining at once leave five active members', async () => {
+  const db = openTestDatabase()
+  const people = await Promise.all([0, 1, 2, 3, 4, 5].map((n) => sessionFor(db, `Racer ${n}`)))
+  const { server, base } = await listen(db)
+  try {
+    const created = await postForm(base, '/groups', people[0].cookie, 'name=Race')
+    const groupPath = created.headers.get('location')
+    assert.ok(groupPath)
+    const joins = await Promise.all(people.slice(1).map((person) => postForm(base, `${groupPath}/join`, person.cookie)))
+    assert.deepEqual(
+      joins.map((response) => response.status).sort(),
+      [303, 303, 303, 303, 409],
     )
-    assert.equal(active.rows[0]?.n, 5)
-    const dir = new URL('../db/', import.meta.url)
-    for (const file of readdirSync(dir).filter((name) => name.endsWith('.sql')).sort()) {
-      await db.exec(readFileSync(new URL(file, dir), 'utf8'))
-    }
-    const after = await db.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM memberships WHERE group_id = $1 AND left_on IS NULL`,
-      [groupId],
-    )
-    assert.equal(after.rows[0]?.n, 5)
+    const groupId = groupPath.slice('/groups/'.length)
+    assert.equal((await members(db, groupId)).length, 5)
   } finally {
     await close(server, db)
   }
 })
 
 test('a blank or oversized name does not create a group', async () => {
-  const db = await openDatabase()
+  const db = openTestDatabase()
   const ada = await sessionFor(db, 'Ada')
   const { server, base } = await listen(db)
   try {
@@ -243,12 +238,6 @@ test('a blank or oversized name does not create a group', async () => {
     const tooManyEmoji = await postForm(base, '/groups', ada.cookie, `name=${encodeURIComponent('😀'.repeat(41))}`)
     assert.equal(tooManyEmoji.status, 400)
     assert.match(await tooManyEmoji.text(), /40 characters or fewer/)
-    await assert.rejects(
-      db.query(`INSERT INTO groups (id, name, created_by) VALUES ($1::uuid, $2, $3)`, [crypto.randomUUID(), 'c'.repeat(41), ada.userId]),
-    )
-    await assert.rejects(
-      db.query(`INSERT INTO groups (id, name, created_by) VALUES ($1::uuid, $2, $3)`, [crypto.randomUUID(), '   ', ada.userId]),
-    )
     assert.equal(await countRows(db, 'groups'), 2)
   } finally {
     await close(server, db)
@@ -256,7 +245,7 @@ test('a blank or oversized name does not create a group', async () => {
 })
 
 test('a signed-out person cannot create or join', async () => {
-  const db = await openDatabase()
+  const db = openTestDatabase()
   const ada = await sessionFor(db, 'Ada')
   const { server, base } = await listen(db)
   try {
@@ -297,7 +286,7 @@ test('a signed-out person cannot create or join', async () => {
 })
 
 test('a signed-out join link comes back to the same group after Google', async () => {
-  const db = await openDatabase()
+  const db = openTestDatabase()
   const ada = await sessionFor(db, 'Ada')
   const { server, base } = await listen(db, googleFetch())
   try {
