@@ -250,7 +250,7 @@ function isPreset(value: string): value is PresetKind {
   return Object.prototype.hasOwnProperty.call(PRESET_LABELS, value)
 }
 
-function isRhythmKind(value: string): value is RhythmKind {
+export function isRhythmKind(value: string): value is RhythmKind {
   return Object.prototype.hasOwnProperty.call(RHYTHM_STEP, value)
 }
 

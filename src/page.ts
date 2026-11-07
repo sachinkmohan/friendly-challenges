@@ -14,6 +14,7 @@ import {
   type RhythmInput,
   type RhythmLine,
 } from './challenge.ts'
+import { CHECK_IN_LABELS, checkInFailureCopy, type CheckIn, type CheckInFailure } from './checkins.ts'
 import { parseGroupId, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
 import { authFailureCopy, type Account, type AuthFailure, type Viewer } from './identity.ts'
 
@@ -146,12 +147,12 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
       color: inherit;
       font: inherit;
     }
-    ul.groups, ul.members {
+    ul.groups, ul.members, ul.check-ins {
       list-style: none;
       margin: 16px 0 0;
       padding: 0;
     }
-    ul.groups li, ul.members li {
+    ul.groups li, ul.members li, ul.check-ins li {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
@@ -180,6 +181,14 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
       color: #1c1915;
       font-weight: 650;
     }
+    .check-in-colors { display: flex; gap: 12px; }
+    .check-in-colors button.green { background: #2f7d4a; }
+    .check-in-colors button.red { background: #b3392f; }
+    .check-ins-title { margin-top: 24px; font-weight: 650; color: #1c1915; }
+    ul.check-ins { margin-top: 8px; }
+    .swatch { width: 16px; height: 16px; flex: none; border-radius: 50%; }
+    .swatch.green { background: #2f7d4a; }
+    .swatch.red { background: #b3392f; }
     .who { display: flex; gap: 12px; align-items: center; }
     .who img, .avatar {
       width: 56px;
@@ -313,6 +322,7 @@ const joinSuffix = '/join'
 const challengeStartSuffix = '/challenge/start'
 const challengeSuffix = '/challenge'
 const rhythmSuffix = '/rhythm'
+const checkInSuffix = '/check-in'
 
 export type HomePage =
   | { state: 'signed_out' }
@@ -326,6 +336,7 @@ export type GroupRoute =
   | { kind: 'save_challenge'; groupId: GroupId }
   | { kind: 'start_challenge'; groupId: GroupId }
   | { kind: 'save_rhythm'; groupId: GroupId }
+  | { kind: 'log_check_in'; groupId: GroupId }
 
 export function groupHref(groupId: GroupId): string {
   return `${groupsRoot}/${groupId}`
@@ -342,7 +353,7 @@ function googleReturnHref(returnPath: string): string {
 function routeSuffix(
   rest: string,
   suffix: string,
-  kind: 'start_challenge' | 'save_challenge' | 'save_rhythm' | 'join',
+  kind: 'start_challenge' | 'save_challenge' | 'save_rhythm' | 'log_check_in' | 'join',
 ): GroupRoute | null {
   if (!rest.endsWith(suffix) || rest.length <= suffix.length) return null
   const idPart = rest.slice(0, -suffix.length)
@@ -361,6 +372,7 @@ export function matchGroupPath(path: string): GroupRoute | null {
     routeSuffix(rest, challengeStartSuffix, 'start_challenge') ??
     routeSuffix(rest, challengeSuffix, 'save_challenge') ??
     routeSuffix(rest, rhythmSuffix, 'save_rhythm') ??
+    routeSuffix(rest, checkInSuffix, 'log_check_in') ??
     routeSuffix(rest, joinSuffix, 'join')
   if (suffixed) return suffixed
   if (rest.includes('/')) return null
@@ -487,10 +499,12 @@ type TermValues = {
   endsOn: string
 }
 
-type ChallengeAttempt = {
+export type ChallengeAttempt = {
   failure?: ChallengeFailure
+  checkInFailure?: CheckInFailure
   draft?: ChallengeInput
   rhythmDraft?: RhythmInput
+  checkInDay?: string
 }
 
 const emptyTerms: TermValues = {
@@ -512,8 +526,9 @@ function headcountSentence(floor: number, cap: number): string {
 }
 
 function failureParagraph(attempt?: ChallengeAttempt): string {
-  if (!attempt?.failure) return ''
-  return `<p>${escapeHtml(challengeFailureCopy[attempt.failure])}</p>`
+  if (attempt?.failure) return `<p>${escapeHtml(challengeFailureCopy[attempt.failure])}</p>`
+  if (attempt?.checkInFailure) return `<p>${escapeHtml(checkInFailureCopy[attempt.checkInFailure])}</p>`
+  return ''
 }
 
 function optionList(items: readonly { value: string; label: string }[], selected: string): string {
@@ -630,6 +645,47 @@ function rhythmControl(
   return rhythmForm(groupId, posted?.interval ?? stored?.kind ?? '', posted?.anchorOn ?? stored?.anchorOn ?? '')
 }
 
+function checkInControl(
+  groupId: GroupId,
+  challenge: MemberChallengeCard,
+  userId: string,
+  postedDay: string | undefined,
+): string {
+  if (challenge.phase !== 'active') return ''
+  if (rhythmSlot(challenge.phase, challenge.rhythms, userId).mode !== 'locked') return ''
+  const action = escapeHtml(`${groupHref(groupId)}${checkInSuffix}`)
+  const start = escapeHtml(challenge.terms.startsOn)
+  const end = escapeHtml(challenge.terms.endsOn)
+  return `<form method="post" action="${action}">
+      <label for="check-in-day">Day to log</label>
+      <input id="check-in-day" name="day" type="date" min="${start}" max="${end}" value="${escapeHtml(postedDay ?? '')}" required>
+      <div class="check-in-colors">
+        <button type="submit" class="green" name="color" value="green">Kept it</button>
+        <button type="submit" class="red" name="color" value="red">Missed it</button>
+      </div>
+    </form>
+    <script>
+      (function () {
+        var input = document.getElementById('check-in-day')
+        if (!input || input.value) return
+        var now = new Date()
+        var pad = function (n) { return String(n).padStart(2, '0') }
+        input.value = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate())
+      })()
+    </script>`
+}
+
+function checkInItem(checkIn: CheckIn): string {
+  const when = escapeHtml(checkIn.day)
+  const label = CHECK_IN_LABELS[checkIn.color]
+  return `<li><span class="swatch ${checkIn.color}" aria-hidden="true"></span> <span class="member-name">${escapeHtml(checkIn.displayName)} <time datetime="${when}">${when}</time></span> <span>${label}</span></li>`
+}
+
+function checkInList(checkIns: readonly CheckIn[]): string {
+  if (checkIns.length === 0) return ''
+  return `<p class="check-ins-title">Check-ins</p><ul class="check-ins">${checkIns.map(checkInItem).join('')}</ul>`
+}
+
 function startForm(groupId: GroupId, activeCount: number, floor: number, cap: number): string {
   if (activeCount < floor || activeCount > cap) return ''
   const action = escapeHtml(`${groupHref(groupId)}/challenge/start`)
@@ -663,7 +719,10 @@ function headlineText(headline: ChallengeHeadline | null): string {
 export function renderGroup(
   view:
     | (Extract<GroupView, { kind: 'preview' | 'full' }> & { readonly headline: ChallengeHeadline | null })
-    | (Extract<GroupView, { kind: 'members' }> & { readonly challenge: MemberChallengeCard }),
+    | (Extract<GroupView, { kind: 'members' }> & {
+        readonly challenge: MemberChallengeCard
+        readonly checkIns: readonly CheckIn[]
+      }),
   viewer: Viewer,
   origin: string,
   attempt?: ChallengeAttempt,
@@ -696,6 +755,7 @@ export function renderGroup(
     challenge.phase === 'draft' ? startForm(view.groupId, view.activeCount, challenge.floor, challenge.cap) : ''
   const userId = viewer.state === 'signed_in' ? viewer.account.id : ''
   const rhythm = rhythmControl(view.groupId, challenge, userId, attempt?.rhythmDraft)
+  const checkIn = checkInControl(view.groupId, challenge, userId, attempt?.checkInDay)
   const rhythms = challenge.phase === 'unopened' ? [] : challenge.rhythms
   const share = escapeHtml(`${origin}${groupHref(view.groupId)}`)
   return groupCard(`
@@ -706,7 +766,9 @@ export function renderGroup(
     ${terms}
     ${start}
     ${rhythm}
+    ${checkIn}
     <ul class="members">${view.members.map((member) => memberItem(member, rhythms)).join('')}</ul>
+    ${checkInList(view.checkIns)}
     <p class="share">Share this link to invite someone. <a href="${share}">${share}</a></p>
   `)
 }

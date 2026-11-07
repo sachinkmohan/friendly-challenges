@@ -13,6 +13,7 @@ import {
   type ChallengeInput,
   type RhythmInput,
 } from './challenge.ts'
+import { listCheckIns, logCheckIn, type CheckInInput } from './checkins.ts'
 import { createGroup, joinGroup, listHomeGroups, viewGroup, type GroupId } from './groups.ts'
 import { authorizeUrl, exchangeCode, type GoogleConfig } from './google.ts'
 import type { Account, AuthFailure, Viewer } from './identity.ts'
@@ -25,6 +26,7 @@ import {
   renderMessage,
   renderNewGroup,
   safeReturnPath,
+  type ChallengeAttempt,
   type GroupRoute,
 } from './page.ts'
 import { accountForSession, createSession, deleteSession } from './sessions.ts'
@@ -190,14 +192,7 @@ async function handleGroup(
       return
     }
     const form = await readForm(req)
-    if (form === 'too_large') {
-      sendHtml(res, 413, renderMessage('Something went wrong', 'Try that again.'))
-      return
-    }
-    if (form === 'bad_type') {
-      sendHtml(res, 400, renderMessage('Something went wrong', 'Try that again.'))
-      return
-    }
+    if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
     const created = await createGroup(deps.db, viewer.account, form.get('name') ?? '')
     if (!created.ok) {
       sendHtml(res, 400, renderNewGroup(viewer, created.failure))
@@ -217,6 +212,10 @@ async function handleGroup(
   }
   if (route.kind === 'save_challenge' || route.kind === 'start_challenge' || route.kind === 'save_rhythm') {
     await postChallenge(req, res, method, origin, route, viewer, deps)
+    return
+  }
+  if (route.kind === 'log_check_in') {
+    await postCheckIn(req, res, method, origin, route.groupId, viewer, deps)
     return
   }
   if (method !== 'POST') return rejectMethod(res, 'POST')
@@ -242,12 +241,6 @@ async function handleGroup(
 }
 
 type ChallengeRoute = Extract<GroupRoute, { kind: 'save_challenge' | 'start_challenge' | 'save_rhythm' }>
-
-type ChallengeAttempt = {
-  failure?: ChallengeFailure
-  draft?: ChallengeInput
-  rhythmDraft?: RhythmInput
-}
 
 function challengeStatus(failure: ChallengeFailure): number {
   if (failure === 'not_member') return 403
@@ -329,7 +322,8 @@ async function sendMemberPage(
     sendHtml(res, 500, renderMessage('Something went wrong', 'Try that again.'))
     return
   }
-  sendHtml(res, status, renderGroup({ ...view, challenge: loaded.card }, viewer, origin, attempt))
+  const checkIns = loaded.card.phase === 'active' ? await listCheckIns(deps.db, groupId) : []
+  sendHtml(res, status, renderGroup({ ...view, challenge: loaded.card, checkIns }, viewer, origin, attempt))
 }
 
 async function finishChallenge(
@@ -382,14 +376,7 @@ async function postChallenge(
     return
   }
   const form = await readForm(req)
-  if (form === 'too_large') {
-    sendHtml(res, 413, renderMessage('Something went wrong', 'Try that again.'))
-    return
-  }
-  if (form === 'bad_type') {
-    sendHtml(res, 400, renderMessage('Something went wrong', 'Try that again.'))
-    return
-  }
+  if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
   if (route.kind === 'save_challenge') {
     const input: ChallengeInput = {
       name: form.get('name') ?? '',
@@ -410,6 +397,47 @@ async function postChallenge(
   }
   const saved = await saveRhythm(deps.db, viewer.account, route.groupId, rhythm)
   await finishChallenge(res, origin, route.groupId, viewer.account, deps, saved, undefined, rhythm)
+}
+
+async function postCheckIn(
+  req: IncomingMessage,
+  res: ServerResponse,
+  method: string,
+  origin: string,
+  groupId: GroupId,
+  viewer: Viewer,
+  deps: AppDeps,
+): Promise<void> {
+  if (method !== 'POST') return rejectMethod(res, 'POST')
+  if (viewer.state === 'signed_out') {
+    req.resume()
+    await sendGroupPage(res, 401, null, groupId, origin, deps)
+    return
+  }
+  const form = await readForm(req)
+  if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
+  const input: CheckInInput = { day: form.get('day') ?? '', color: form.get('color') ?? '' }
+  const logged = await logCheckIn(deps.db, viewer.account, groupId, input)
+  if (logged.ok) {
+    sendRedirect(res, groupHref(groupId), [], 303)
+    return
+  }
+  if (logged.failure === 'group_missing') {
+    notFound(res)
+    return
+  }
+  if (logged.failure === 'not_member') {
+    await sendGroupPage(res, 403, viewer.account, groupId, origin, deps, { checkInFailure: logged.failure })
+    return
+  }
+  await sendMemberPage(res, 400, viewer.account, groupId, origin, deps, {
+    checkInFailure: logged.failure,
+    checkInDay: input.day,
+  })
+}
+
+function rejectForm(res: ServerResponse, failure: 'too_large' | 'bad_type'): void {
+  sendHtml(res, failure === 'too_large' ? 413 : 400, renderMessage('Something went wrong', 'Try that again.'))
 }
 
 async function readForm(req: IncomingMessage): Promise<URLSearchParams | 'too_large' | 'bad_type'> {
