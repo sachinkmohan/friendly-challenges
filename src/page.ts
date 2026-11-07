@@ -14,6 +14,7 @@ import {
   type RhythmInput,
   type RhythmLine,
 } from './challenge.ts'
+import { DAY_MARK_LABELS, type GroupCalendar, type Heatmap, type MarkedDay } from './calendar.ts'
 import { CHECK_IN_LABELS, checkInFailureCopy, type CheckIn, type CheckInFailure } from './checkins.ts'
 import { parseGroupId, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
 import { authFailureCopy, type Account, type AuthFailure, type Viewer } from './identity.ts'
@@ -189,6 +190,33 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
     .swatch { width: 16px; height: 16px; flex: none; border-radius: 50%; }
     .swatch.green { background: #2f7d4a; }
     .swatch.red { background: #b3392f; }
+    .grid-title { margin-top: 24px; font-weight: 650; color: #1c1915; }
+    .grid-scroll { margin-top: 8px; overflow-x: auto; }
+    table.grid { border-collapse: separate; border-spacing: 3px; }
+    table.grid th {
+      padding: 0 6px 0 0;
+      color: #5c564c;
+      font-size: 11px;
+      font-weight: 650;
+      text-align: left;
+      white-space: nowrap;
+    }
+    table.grid thead th { padding: 0; text-align: center; }
+    table.grid tbody th {
+      position: sticky;
+      left: 0;
+      max-width: 88px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      background: #fffdf8;
+    }
+    table.grid td { padding: 0; }
+    .cell { display: block; width: 14px; height: 14px; border-radius: 3px; }
+    .cell.green { background: #2f7d4a; }
+    .cell.red { background: #b3392f; }
+    .cell.empty { box-shadow: inset 0 0 0 1.5px #8a8378; }
+    .cell.blank { background: #efe8dc; }
+    .grid-note { margin-top: 8px; }
     .who { display: flex; gap: 12px; align-items: center; }
     .who img, .avatar {
       width: 56px;
@@ -326,7 +354,7 @@ const checkInSuffix = '/check-in'
 
 export type HomePage =
   | { state: 'signed_out' }
-  | { state: 'signed_in'; account: Account; groups: readonly HomeGroup[] }
+  | { state: 'signed_in'; account: Account; groups: readonly HomeGroup[]; heatmaps: readonly Heatmap[] }
 
 export type GroupRoute =
   | { kind: 'new' }
@@ -400,6 +428,45 @@ function homeGroups(groups: readonly HomeGroup[]): string {
   return `<ul class="groups">${items}</ul>`
 }
 
+const WEEKDAY_LABELS = ['', 'Mon', '', 'Wed', '', 'Fri', ''] as const
+
+function dayCell(marked: MarkedDay): string {
+  const day = escapeHtml(marked.day)
+  const label = escapeHtml(`${marked.day} ${DAY_MARK_LABELS[marked.mark]}`)
+  return `<td data-day="${day}" data-mark="${marked.mark}"><span class="cell ${marked.mark}" role="img" aria-label="${label}" title="${label}"></span></td>`
+}
+
+function notStartedNote(startsOn: string): string {
+  const when = escapeHtml(startsOn)
+  return `<p class="grid-note">The first day is <time datetime="${when}">${when}</time>.</p>`
+}
+
+function calendarGrid(calendar: GroupCalendar): string {
+  const title = '<p class="grid-title">Calendar</p>'
+  if (calendar.days.length === 0) return `${title}${notStartedNote(calendar.startsOn)}`
+  const head = calendar.days.map((day) => `<th scope="col">${Number(day.slice(8, 10))}</th>`).join('')
+  const rows = calendar.rows
+    .map((row) => {
+      const name = escapeHtml(row.displayName)
+      return `<tr data-member="${escapeHtml(row.userId)}"><th scope="row" title="${name}">${name}</th>${row.days.map(dayCell).join('')}</tr>`
+    })
+    .join('')
+  return `${title}<div class="grid-scroll"><table class="grid calendar"><thead><tr><td></td>${head}</tr></thead><tbody>${rows}</tbody></table></div>`
+}
+
+function heatmapGrid(heatmap: Heatmap): string {
+  const title = `<p class="grid-title">${escapeHtml(heatmap.name)}</p>`
+  if (heatmap.weeks.length === 0) return `${title}${notStartedNote(heatmap.startsOn)}`
+  const rows = WEEKDAY_LABELS.map((label, weekday) => {
+    const cells = heatmap.weeks.map((week) => {
+      const marked = week[weekday]
+      return marked ? dayCell(marked) : '<td></td>'
+    })
+    return `<tr data-weekday="${weekday}"><th scope="row">${label}</th>${cells.join('')}</tr>`
+  }).join('')
+  return `${title}<div class="grid-scroll"><table class="grid heatmap" data-group="${escapeHtml(heatmap.groupId)}"><tbody>${rows}</tbody></table></div>`
+}
+
 function signedOutScreens(): string {
   return `
     <section id="home" class="screen">
@@ -419,7 +486,7 @@ function signedOutScreens(): string {
   `
 }
 
-function signedInScreens(account: Account, groups: readonly HomeGroup[]): string {
+function signedInScreens(account: Account, groups: readonly HomeGroup[], heatmaps: readonly Heatmap[]): string {
   const name = escapeHtml(account.displayName)
   const email = escapeHtml(account.email)
   return `
@@ -427,6 +494,7 @@ function signedInScreens(account: Account, groups: readonly HomeGroup[]): string
       <article class="card">
         <h2>Hello, ${name}</h2>
         ${homeGroups(groups)}
+        ${heatmaps.map(heatmapGrid).join('')}
         <a class="button" href="${groupsRoot}/new">Create a group</a>
       </article>
     </section>
@@ -448,7 +516,7 @@ function signedInScreens(account: Account, groups: readonly HomeGroup[]): string
 }
 
 export function renderHome(page: HomePage): string {
-  const screens = page.state === 'signed_out' ? signedOutScreens() : signedInScreens(page.account, page.groups)
+  const screens = page.state === 'signed_out' ? signedOutScreens() : signedInScreens(page.account, page.groups, page.heatmaps)
   return frame(screens, tabBar('#home', '#account'))
 }
 
@@ -722,6 +790,7 @@ export function renderGroup(
     | (Extract<GroupView, { kind: 'members' }> & {
         readonly challenge: MemberChallengeCard
         readonly checkIns: readonly CheckIn[]
+        readonly calendar: GroupCalendar | null
       }),
   viewer: Viewer,
   origin: string,
@@ -768,6 +837,7 @@ export function renderGroup(
     ${rhythm}
     ${checkIn}
     <ul class="members">${view.members.map((member) => memberItem(member, rhythms)).join('')}</ul>
+    ${view.calendar ? calendarGrid(view.calendar) : ''}
     ${checkInList(view.checkIns)}
     <p class="share">Share this link to invite someone. <a href="${share}">${share}</a></p>
   `)

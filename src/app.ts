@@ -13,6 +13,8 @@ import {
   type ChallengeInput,
   type RhythmInput,
 } from './challenge.ts'
+import { groupCalendar, listHeatmaps, utcToday } from './calendar.ts'
+import type { IsoDate } from './challenge.ts'
 import { listCheckIns, logCheckIn, type CheckInInput } from './checkins.ts'
 import { createGroup, joinGroup, listHomeGroups, viewGroup, type GroupId } from './groups.ts'
 import { authorizeUrl, exchangeCode, type GoogleConfig } from './google.ts'
@@ -42,6 +44,7 @@ export type AppDeps = {
   db: PGlite
   config: GoogleConfig
   fetch?: typeof fetch
+  today?: () => IsoDate
 }
 
 function requestOrigin(req: IncomingMessage): string {
@@ -97,6 +100,7 @@ export function createApp(deps: AppDeps) {
                 state: 'signed_in',
                 account: viewer.account,
                 groups: await listHomeGroups(deps.db, viewer.account),
+                heatmaps: await listHeatmaps(deps.db, viewer.account, (deps.today ?? utcToday)()),
               })
         sendHtml(res, 200, home)
         return
@@ -322,8 +326,19 @@ async function sendMemberPage(
     sendHtml(res, 500, renderMessage('Something went wrong', 'Try that again.'))
     return
   }
-  const checkIns = loaded.card.phase === 'active' ? await listCheckIns(deps.db, groupId) : []
-  sendHtml(res, status, renderGroup({ ...view, challenge: loaded.card, checkIns }, viewer, origin, attempt))
+  const card = loaded.card
+  const checkIns = card.phase === 'active' ? await listCheckIns(deps.db, groupId) : []
+  const calendar =
+    card.phase === 'active'
+      ? groupCalendar({
+          window: { phase: 'active', startsOn: card.terms.startsOn, endsOn: card.terms.endsOn },
+          today: (deps.today ?? utcToday)(),
+          members: view.members,
+          rhythms: card.rhythms,
+          checkIns,
+        })
+      : null
+  sendHtml(res, status, renderGroup({ ...view, challenge: card, checkIns, calendar }, viewer, origin, attempt))
 }
 
 async function finishChallenge(

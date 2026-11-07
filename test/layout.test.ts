@@ -16,7 +16,7 @@ test('every page is the same phone shell', () => {
   if (!groupId) throw new Error('fixture group id')
   const pages = [
     renderHome({ state: 'signed_out' }),
-    renderHome({ state: 'signed_in', account, groups: [] }),
+    renderHome({ state: 'signed_in', account, groups: [], heatmaps: [] }),
     renderNewGroup({ state: 'signed_out' }),
     renderNewGroup({ state: 'signed_in', account }),
     renderGroup(
@@ -56,7 +56,7 @@ test('signed-out shell keeps Google sign-in on the phone screens', () => {
 })
 
 test('signed-in shell keeps the account card and sign-out', () => {
-  const html = renderHome({ state: 'signed_in', account, groups: [] })
+  const html = renderHome({ state: 'signed_in', account, groups: [], heatmaps: [] })
   assert.match(html, /Hello, Ada/)
   assert.match(html, /You are not in a group yet/)
   assert.match(html, /href="\/groups\/new"/)
