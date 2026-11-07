@@ -71,3 +71,22 @@ test('signed-in shell keeps the account card and sign-out', () => {
   assert.match(html, /action="\/logout"/)
   assert.match(html, /Sign out/)
 })
+
+test('home keeps your groups apart from creating a new one', () => {
+  const groupId = parseGroupId('00000000-0000-4000-8000-000000000001')
+  if (!groupId) throw new Error('fixture group id')
+  const html = renderHome({
+    state: 'signed_in',
+    account,
+    groups: [{ groupId, name: '100 Days of Writing', activeCount: 2 }],
+    heatmaps: [],
+  })
+  const yours = html.indexOf('Your groups')
+  const group = html.indexOf('100 Days of Writing')
+  const fresh = html.indexOf('Start something new')
+  const create = html.indexOf('href="/groups/new"')
+  assert.ok(yours > -1 && yours < group, 'groups sit under a Your groups label')
+  assert.ok(group < fresh && fresh < create, 'creating a group sits in its own later section')
+  assert.match(html, /<a href="\/groups\/[^"]+"><span class="group-name">100 Days of Writing<\/span><span class="count">2 active<\/span>/)
+  assert.match(html, /<div class="new-group">/)
+})
