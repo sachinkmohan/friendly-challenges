@@ -223,6 +223,7 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
     .cell.empty { box-shadow: inset 0 0 0 1.5px #8a8378; }
     .cell.blank { background: #efe8dc; }
     .grid-note { margin-top: 8px; }
+    .field-hint { font-size: 14px; line-height: 1.4; }
     .who { display: flex; gap: 12px; align-items: center; }
     .who img, .avatar {
       width: 56px;
@@ -760,7 +761,8 @@ function rhythmForm(groupId: GroupId, interval: string, anchor: string): string 
       <label for="rhythm-interval">How often you log</label>
       <select id="rhythm-interval" name="interval">${intervalOptions(interval)}</select>
       <label for="rhythm-anchor">Anchor date</label>
-      <input id="rhythm-anchor" name="anchor_on" type="date" value="${escapeHtml(anchor)}">
+      <p class="field-hint" id="rhythm-anchor-hint">The first day you log. Your next days repeat from it at the interval above. Pick a date on or before the challenge ends.</p>
+      <input id="rhythm-anchor" name="anchor_on" type="date" aria-describedby="rhythm-anchor-hint" value="${escapeHtml(anchor)}">
       <button type="submit">Save rhythm</button>
     </form>`
 }

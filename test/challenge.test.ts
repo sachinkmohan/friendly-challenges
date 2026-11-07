@@ -469,6 +469,8 @@ test('the group card saves the stake, starts at three members, and then freezes'
     assert.doesNotMatch(activeHtml, /name="stake"/)
     assert.doesNotMatch(activeHtml, /challenge\/start/)
     assert.match(activeHtml, /name="interval"/)
+    assert.match(activeHtml, /aria-describedby="rhythm-anchor-hint"/)
+    assert.match(activeHtml, /The first day you log\. Your next days repeat from it at the interval above\./)
     assert.equal(await challengeCount(db), 1)
     assert.equal((await challengeOf(db, groupId))?.phase, 'active')
 
