@@ -18,5 +18,8 @@
   },
   "devDependencies": {
     "firebase-tools": "^15.35.0"
+  },
+  "overrides": {
+    "jwks-rsa": "3.2.2"
   }
 }
