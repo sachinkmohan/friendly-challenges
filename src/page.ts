@@ -344,6 +344,7 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
   </script>
   <script type="module">
     const forms = document.querySelectorAll('form.sign-in')
+    const blockedHere = ['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment', 'auth/web-storage-unsupported']
     const showError = (form, text) => {
       const error = form.querySelector('.sign-in-error')
       error.textContent = text
@@ -366,8 +367,16 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
               form.elements.idToken.value = await result.user.getIdToken()
               await signOut(auth)
               form.submit()
-            } catch {
-              showError(form, 'Sign-in did not finish. Try again.')
+            } catch (error) {
+              const code = String((error && error.code) || 'unknown')
+              console.error(error)
+              if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+                showError(form, 'Sign-in did not finish. Try again.')
+              } else if (blockedHere.includes(code)) {
+                showError(form, 'This browser blocked the Google sign-in window (' + code + '). If you opened the link inside another app, open it in Chrome or Safari.')
+              } else {
+                showError(form, 'Sign-in did not finish (' + code + '). Try again.')
+              }
             }
           })
         })
