@@ -32,11 +32,7 @@ export async function loadSample(db: Database): Promise<void> {
 
 export async function openDatabase(dataDir?: string): Promise<Database> {
   const databaseUrl = process.env.DATABASE_URL?.trim() ?? ''
-  if (databaseUrl !== '') {
-    const db = openPostgres(databaseUrl)
-    await applySchema(db)
-    return db
-  }
+  if (databaseUrl !== '') return openPostgres(databaseUrl)
   const db = dataDir ? new PGlite(dataDir) : new PGlite()
   await db.waitReady
   const wrapped = fromPglite(db)
