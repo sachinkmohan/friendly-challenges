@@ -1,0 +1,317 @@
+import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { test } from 'node:test'
+import type { PGlite } from '@electric-sql/pglite'
+import { upsertAccount } from '../src/accounts.ts'
+import { createApp } from '../src/app.ts'
+import { missedDayDebts, readLedger, recordPayment, settle, type Ledger } from '../src/balances.ts'
+import type { CalendarMember } from '../src/calendar.ts'
+import { parseIsoDate, saveChallenge, saveRhythm, startChallenge, type IsoDate } from '../src/challenge.ts'
+import { logCheckIn } from '../src/checkins.ts'
+import { openDatabase } from '../src/db.ts'
+import { createGroup, joinGroup, type GroupId } from '../src/groups.ts'
+import type { Account } from '../src/identity.ts'
+import { createSession } from '../src/sessions.ts'
+
+function iso(raw: string): IsoDate {
+  const day = parseIsoDate(raw)
+  if (!day) throw new Error(raw)
+  return day
+}
+
+const window = { phase: 'active', startsOn: iso('2026-11-01'), endsOn: iso('2026-11-30') } as const
+
+function member(
+  userId: string,
+  joinedOn: string,
+  colors: Record<string, 'green' | 'red'> = {},
+  leftOn: string | null = null,
+): CalendarMember {
+  return {
+    userId,
+    displayName: userId,
+    span: { joinedOn: iso(joinedOn), leftOn: leftOn === null ? null : iso(leftOn) },
+    rhythm: { kind: 'every_day', anchorOn: iso('2026-11-01') },
+    colors: new Map(Object.entries(colors).map(([day, color]) => [iso(day), color])),
+  }
+}
+
+function netsOf(settlement: { nets: readonly { userId: string; netMinor: number }[] }): Record<string, number> {
+  return Object.fromEntries(settlement.nets.map((line) => [line.userId, line.netMinor]))
+}
+
+function total(settlement: { nets: readonly { netMinor: number }[] }): number {
+  return settlement.nets.reduce((sum, line) => sum + line.netMinor, 0)
+}
+
+test('a red day owes the stake to each other member active that day and a green day owes nothing', () => {
+  const members = [
+    member('ada', '2026-11-01', { '2026-11-01': 'red', '2026-11-02': 'green' }),
+    member('grace', '2026-11-01', { '2026-11-01': 'green', '2026-11-02': 'green' }),
+    member('lin', '2026-11-02', { '2026-11-02': 'green' }),
+  ]
+  const debts = missedDayDebts({ window, today: iso('2026-11-03') }, 500, members)
+  assert.deepEqual(debts, [{ debtorId: 'ada', creditorId: 'grace', day: '2026-11-01', amountMinor: 500 }])
+})
+
+test('a past due day with no check-in is red and today is not', () => {
+  const members = [member('ada', '2026-11-01'), member('grace', '2026-11-01', {}, '2026-11-01')]
+  const debts = missedDayDebts({ window, today: iso('2026-11-02') }, 500, members)
+  assert.deepEqual(
+    debts.map((debt) => [debt.debtorId, debt.creditorId, debt.day]),
+    [
+      ['ada', 'grace', '2026-11-01'],
+      ['grace', 'ada', '2026-11-01'],
+    ],
+  )
+})
+
+test('the open amount nets both directions, then subtracts payments from debtor to creditor', () => {
+  const people = ['ada', 'grace', 'lin'].map((userId) => ({ userId, displayName: userId }))
+  const debts = [
+    { debtorId: 'ada', creditorId: 'grace', day: iso('2026-11-01'), amountMinor: 700 },
+    { debtorId: 'grace', creditorId: 'ada', day: iso('2026-11-02'), amountMinor: 200 },
+    { debtorId: 'lin', creditorId: 'ada', day: iso('2026-11-02'), amountMinor: 300 },
+  ]
+  const settled = settle(people, debts, [{ payerId: 'ada', payeeId: 'grace', amountMinor: 100 }])
+  assert.deepEqual(
+    settled.open.map((line) => [line.debtorId, line.creditorId, line.amountMinor]),
+    [
+      ['ada', 'grace', 400],
+      ['lin', 'ada', 300],
+    ],
+  )
+  assert.deepEqual(netsOf(settled), { ada: -100, grace: 400, lin: -300 })
+  assert.equal(total(settled), 0)
+
+  const overpaid = settle(people, debts, [{ payerId: 'ada', payeeId: 'grace', amountMinor: 600 }])
+  assert.deepEqual(
+    overpaid.open.map((line) => [line.debtorId, line.creditorId, line.amountMinor]),
+    [
+      ['grace', 'ada', 100],
+      ['lin', 'ada', 300],
+    ],
+  )
+  assert.equal(total(overpaid), 0)
+})
+
+async function person(db: PGlite, name: string): Promise<Account> {
+  const saved = await upsertAccount(db, {
+    sub: `sub-${name}`,
+    email: `${name.toLowerCase()}@example.com`,
+    emailVerified: true,
+    displayName: name,
+    avatarUrl: null,
+  })
+  if (!saved.ok) throw new Error('account')
+  return saved.account
+}
+
+type Crew = { db: PGlite; ada: Account; grace: Account; lin: Account; groupId: GroupId }
+
+async function crew(options: { start?: boolean } = {}): Promise<Crew> {
+  const db = await openDatabase()
+  const ada = await person(db, 'Ada')
+  const grace = await person(db, 'Grace')
+  const lin = await person(db, 'Lin')
+  const created = await createGroup(db, ada, 'Morning run')
+  if (!created.ok) throw new Error(created.failure)
+  const groupId = created.groupId
+  for (const who of [grace, lin]) {
+    const joined = await joinGroup(db, who, groupId)
+    if (!joined.ok) throw new Error(joined.failure)
+  }
+  await db.query(`UPDATE memberships SET joined_on = '2026-11-01' WHERE group_id = $1`, [groupId])
+  const saved = await saveChallenge(db, ada, groupId, {
+    name: 'No sweets',
+    type: 'no_sugar',
+    customLabel: '',
+    currency: 'USD',
+    stake: '5',
+    startsOn: '2026-11-01',
+    endsOn: '2026-11-30',
+  })
+  if (!saved.ok) throw new Error(saved.failure)
+  for (const [who, interval, anchorOn] of [
+    [ada, 'every_day', '2026-11-01'],
+    [grace, 'every_2_days', '2026-11-02'],
+    [lin, 'every_day', '2026-11-01'],
+  ] as const) {
+    const rhythm = await saveRhythm(db, who, groupId, { interval, anchorOn })
+    if (!rhythm.ok) throw new Error(rhythm.failure)
+  }
+  if (options.start !== false) {
+    const started = await startChallenge(db, ada, groupId)
+    if (!started.ok) throw new Error(started.failure)
+  }
+  return { db, ada, grace, lin, groupId }
+}
+
+async function ledger(db: PGlite, groupId: GroupId, today: string): Promise<Ledger> {
+  const read = await readLedger(db, groupId, iso(today))
+  if (!read) throw new Error('ledger')
+  return read
+}
+
+test('nets follow check-ins and payments with nothing stored between reads', async () => {
+  const { db, ada, grace, lin, groupId } = await crew()
+  try {
+    const first = await ledger(db, groupId, '2026-11-04')
+    assert.deepEqual(netsOf(first), { [ada.id]: -1000, [grace.id]: 2000, [lin.id]: -1000 })
+    assert.equal(total(first), 0)
+
+    for (const day of ['2026-11-01', '2026-11-02', '2026-11-03']) {
+      assert.deepEqual(await logCheckIn(db, ada, groupId, { day, color: 'red' }), { ok: true })
+    }
+    assert.deepEqual(netsOf(await ledger(db, groupId, '2026-11-04')), netsOf(first))
+
+    for (const day of ['2026-11-01', '2026-11-02', '2026-11-03']) {
+      assert.deepEqual(await logCheckIn(db, ada, groupId, { day, color: 'green' }), { ok: true })
+    }
+    const green = await ledger(db, groupId, '2026-11-04')
+    assert.deepEqual(netsOf(green), { [ada.id]: 2000, [grace.id]: 500, [lin.id]: -2500 })
+    assert.equal(total(green), 0)
+
+    const paid = await recordPayment(
+      db,
+      lin,
+      groupId,
+      { payeeId: ada.id, amount: '15.00', paidOn: '2026-11-04', paypalRef: ' 9XY12345AB6789012 ' },
+      iso('2026-11-04'),
+    )
+    assert.deepEqual(paid, { ok: true })
+    const after = await ledger(db, groupId, '2026-11-04')
+    assert.deepEqual(netsOf(after), { [ada.id]: 500, [grace.id]: 500, [lin.id]: -1000 })
+    assert.equal(total(after), 0)
+    assert.deepEqual(
+      after.payments.map((item) => [item.payerName, item.payeeName, item.amountMinor, item.currency, item.paidOn, item.paypalRef]),
+      [['Lin', 'Ada', 1500, 'USD', '2026-11-04', '9XY12345AB6789012']],
+    )
+  } finally {
+    await db.close()
+  }
+})
+
+test('a payment needs another member, a real past date, an amount in the currency, and a started challenge', async () => {
+  const { db, ada, grace, groupId } = await crew()
+  const today = iso('2026-11-04')
+  const pay = (who: Account, input: Partial<Parameters<typeof recordPayment>[3]>) =>
+    recordPayment(db, who, groupId, { payeeId: grace.id, amount: '1', paidOn: '2026-11-04', paypalRef: '', ...input }, today)
+  try {
+    assert.deepEqual(await pay(ada, { payeeId: ada.id }), { ok: false, failure: 'bad_payee' })
+    assert.deepEqual(await pay(ada, { payeeId: 'nobody' }), { ok: false, failure: 'bad_payee' })
+    assert.deepEqual(await pay(ada, { amount: '0' }), { ok: false, failure: 'amount_not_positive' })
+    assert.deepEqual(await pay(ada, { amount: '1.005' }), { ok: false, failure: 'amount_not_positive' })
+    assert.deepEqual(await pay(ada, { amount: '-3' }), { ok: false, failure: 'amount_not_positive' })
+    assert.deepEqual(await pay(ada, { amount: '10000000001' }), { ok: false, failure: 'amount_too_large' })
+    assert.deepEqual(await pay(ada, { paidOn: '2026-02-30' }), { ok: false, failure: 'bad_date' })
+    assert.deepEqual(await pay(ada, { paidOn: '2026-11-05' }), { ok: false, failure: 'future_date' })
+    assert.deepEqual(await pay(ada, { paypalRef: 'x'.repeat(65) }), { ok: false, failure: 'ref_too_long' })
+    assert.deepEqual(await pay(await person(db, 'Noor'), {}), { ok: false, failure: 'not_member' })
+    assert.deepEqual(await pay(ada, { amount: '0.01' }), { ok: true })
+    const stored = await db.query<{ amount_minor: string; currency: string; paypal_ref: string | null }>(
+      `SELECT amount_minor::text AS amount_minor, btrim(currency) AS currency, paypal_ref FROM payments`,
+    )
+    assert.deepEqual(stored.rows, [{ amount_minor: '1', currency: 'USD', paypal_ref: null }])
+  } finally {
+    await db.close()
+  }
+  const draft = await crew({ start: false })
+  try {
+    const result = await recordPayment(
+      draft.db,
+      draft.ada,
+      draft.groupId,
+      { payeeId: draft.grace.id, amount: '1', paidOn: '2026-11-04', paypalRef: '' },
+      today,
+    )
+    assert.deepEqual(result, { ok: false, failure: 'not_active' })
+    assert.equal(await readLedger(draft.db, draft.groupId, today), null)
+  } finally {
+    await draft.db.close()
+  }
+})
+
+test('the database rejects a payment in another currency or to yourself', async () => {
+  const { db, ada, grace, groupId } = await crew()
+  try {
+    await assert.rejects(
+      db.query(
+        `INSERT INTO payments (id, group_id, payer_id, payee_id, amount_minor, currency, paid_on)
+         VALUES (gen_random_uuid(), $1, $2, $3, 100, 'EUR', '2026-11-04')`,
+        [groupId, ada.id, grace.id],
+      ),
+    )
+    await assert.rejects(
+      db.query(
+        `INSERT INTO payments (id, group_id, payer_id, payee_id, amount_minor, currency, paid_on)
+         VALUES (gen_random_uuid(), $1, $2, $2, 100, 'USD', '2026-11-04')`,
+        [groupId, ada.id],
+      ),
+    )
+  } finally {
+    await db.close()
+  }
+})
+
+test('the group card shows each net and who owes whom, and a recorded payment changes them', async () => {
+  const { db, ada, grace, lin, groupId } = await crew()
+  const linCookie = `session=${encodeURIComponent(await createSession(db, lin.id))}`
+  const app = createApp({
+    db,
+    config: { clientId: 'client-id', clientSecret: 'client-secret' },
+    today: () => iso('2026-11-04'),
+  })
+  const server = createServer((req, res) => {
+    void app(req, res)
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  const groupPath = `/groups/${groupId}`
+  const page = async () => (await fetch(`${base}${groupPath}`, { headers: { cookie: linCookie } })).text()
+  const pay = (fields: Record<string, string>) =>
+    fetch(`${base}${groupPath}/payment`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { cookie: linCookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(fields).toString(),
+    })
+  const net = (html: string, userId: string) => new RegExp(`data-net="${userId}" data-minor="(-?\\d+)"`).exec(html)?.[1]
+  try {
+    const before = await page()
+    assert.equal(net(before, ada.id), '-1000')
+    assert.equal(net(before, grace.id), '2000')
+    assert.equal(net(before, lin.id), '-1000')
+    assert.match(before, /Ada owes Grace 10\.00 USD/)
+    assert.match(before, /Lin owes Grace 10\.00 USD/)
+    assert.match(before, /Grace<\/span> <span class="net owed">is owed 20\.00 USD/)
+
+    const bad = await pay({ payee: grace.id, amount: '0', paid_on: '2026-11-04', paypal_ref: '' })
+    assert.equal(bad.status, 400)
+    const badHtml = await bad.text()
+    assert.match(badHtml, /Type an amount above zero\./)
+    assert.match(badHtml, /name="paypal_ref" value=""/)
+
+    const ok = await pay({ payee: grace.id, amount: '10', paid_on: '2026-11-03', paypal_ref: 'ABC123' })
+    assert.equal(ok.status, 303)
+    const after = await page()
+    assert.equal(net(after, lin.id), '0')
+    assert.equal(net(after, grace.id), '1000')
+    assert.doesNotMatch(after, /Lin owes Grace/)
+    assert.match(after, /Lin paid Grace 10\.00 USD <time datetime="2026-11-03">/)
+    assert.match(after, /PayPal ABC123/)
+
+    const signedOut = await fetch(`${base}${groupPath}/payment`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'payee=x',
+    })
+    assert.equal(signedOut.status, 401)
+    assert.equal((await fetch(`${base}${groupPath}/payment`, { headers: { cookie: linCookie } })).status, 405)
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+    await db.close()
+  }
+})
