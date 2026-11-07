@@ -26,6 +26,10 @@ Open that link while signed in as someone else. Choose **Join group**. A sixth p
 
 On the group page, name the challenge, pick the type, the currency, and the stake per day. The stake is the amount in that currency, and the app stores the minor units. Each member picks how often they log and an anchor date. The choices are every day, every 2 days, every 3 days, and alternate days. **Start challenge** appears when 3 to 5 people are active. After the start, the shared terms stay as they are. A member who has not picked a rhythm can still save one. A saved rhythm stays put.
 
+## Check-ins
+
+After the start, each member with a rhythm sees a day picker and two buttons on the group card. **Kept it** saves the day green. **Missed it** saves it red. Saving the same day again replaces the color. The app accepts only a day the member is due by their rhythm, inside the challenge dates, and inside their membership. The card lists every saved check-in with the member, the day, and the color.
+
 ## Check
 
 ```bash
