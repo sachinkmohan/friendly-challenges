@@ -1,42 +1,13 @@
 import assert from 'node:assert/strict'
-import { createServer, type Server } from 'node:http'
+import type { Server } from 'node:http'
 import { test } from 'node:test'
-import type { AddressInfo } from 'node:net'
 import { upsertAccount } from '../src/accounts.ts'
-import { createApp } from '../src/app.ts'
 import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
 import { countDocs, readGroup, utcToday } from '../src/store.ts'
 import { createSession } from '../src/sessions.ts'
-
-const TOKEN_URL = 'https://oauth2.googleapis.com/token'
-const USERINFO_URL = 'https://www.googleapis.com/oauth2/v3/userinfo'
+import { fakeVerifier, googleToken, listen } from './support/fixtures.ts'
 
 type Person = { cookie: string; userId: string }
-
-function googleFetch() {
-  return (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input)
-    if (url === TOKEN_URL) {
-      return new Response(JSON.stringify({ access_token: 'token-from-google' }), { status: 200 })
-    }
-    if (url === USERINFO_URL) {
-      const headers = new Headers(init?.headers)
-      if (headers.get('authorization') !== 'Bearer token-from-google') {
-        return new Response('unauthorized', { status: 401 })
-      }
-      return new Response(
-        JSON.stringify({
-          sub: 'google-return-1',
-          email: 'grace@example.com',
-          email_verified: true,
-          name: 'Grace',
-        }),
-        { status: 200 },
-      )
-    }
-    return new Response('unexpected', { status: 500 })
-  }) as typeof fetch
-}
 
 async function sessionFor(db: Database, name: string, avatarUrl: string | null = null): Promise<Person> {
   const saved = await upsertAccount(db, {
@@ -51,29 +22,9 @@ async function sessionFor(db: Database, name: string, avatarUrl: string | null =
   return { cookie: `session=${encodeURIComponent(token)}`, userId: saved.account.id }
 }
 
-async function listen(db: Database, fetchImpl?: typeof fetch) {
-  const app = createApp({
-    db,
-    config: { clientId: 'client-id', clientSecret: 'client-secret' },
-    fetch: fetchImpl,
-  })
-  const server = createServer((req, res) => {
-    void app(req, res)
-  })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const address = server.address() as AddressInfo
-  return { server, base: `http://127.0.0.1:${address.port}` }
-}
-
 async function close(server: Server, db: Database) {
   await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
   await closeDatabase(db)
-}
-
-function cookiesFrom(response: Response): string {
-  const headers = response.headers as Headers & { getSetCookie?: () => string[] }
-  const set = headers.getSetCookie?.() ?? []
-  return set.map((line) => line.split(';')[0]).join('; ')
 }
 
 async function countRows(db: Database, table: 'groups' | 'memberships'): Promise<number> {
@@ -279,7 +230,9 @@ test('a signed-out person cannot create or join', async () => {
     assert.equal(await countRows(db, 'memberships'), beforeMembers)
     const page = await fetch(`${base}/groups/new`)
     assert.equal(page.status, 200)
-    assert.doesNotMatch(await page.text(), /<form/)
+    const newHtml = await page.text()
+    assert.doesNotMatch(newHtml, /action="\/groups"/)
+    assert.match(newHtml, /name="return" value="\/groups\/new"/)
   } finally {
     await close(server, db)
   }
@@ -288,7 +241,10 @@ test('a signed-out person cannot create or join', async () => {
 test('a signed-out join link comes back to the same group after Google', async () => {
   const db = openTestDatabase()
   const ada = await sessionFor(db, 'Ada')
-  const { server, base } = await listen(db, googleFetch())
+  const grace = googleToken('google-return-1', { email: 'grace@example.com', email_verified: true, name: 'Grace' })
+  const { server, base } = await listen(db, { verifyIdToken: fakeVerifier(new Map([['grace-token', grace]])) })
+  const signIn = (returnPath: string) =>
+    postForm(base, '/auth/firebase', null, new URLSearchParams({ idToken: 'grace-token', return: returnPath }).toString())
   try {
     const created = await postForm(base, '/groups', ada.cookie, 'name=Morning+run')
     const groupPath = created.headers.get('location')
@@ -296,45 +252,17 @@ test('a signed-out join link comes back to the same group after Google', async (
     const before = await countRows(db, 'memberships')
     const anon = await fetch(`${base}${groupPath}`)
     assert.equal(anon.status, 200)
-    assert.match(await anon.text(), new RegExp(`/auth/google\\?return=${encodeURIComponent(groupPath)}`))
+    const anonHtml = await anon.text()
+    assert.match(anonHtml, /action="\/auth\/firebase"/)
+    assert.match(anonHtml, new RegExp(`name="return" value="${groupPath}"`))
     assert.equal(await countRows(db, 'memberships'), before)
 
-    const start = await fetch(`${base}/auth/google?return=${encodeURIComponent(groupPath)}`, { redirect: 'manual' })
-    const state = new URL(start.headers.get('location') ?? '').searchParams.get('state')
-    const callback = await fetch(
-      `${base}/auth/google/callback?code=good-code&state=${encodeURIComponent(state ?? '')}`,
-      { redirect: 'manual', headers: { cookie: cookiesFrom(start) } },
-    )
-    assert.equal(callback.status, 302)
-    assert.equal(callback.headers.get('location'), groupPath)
-
-    const hostile = await fetch(`${base}/auth/google?return=https://evil.example`, { redirect: 'manual' })
-    const hostileState = new URL(hostile.headers.get('location') ?? '').searchParams.get('state')
-    const home = await fetch(
-      `${base}/auth/google/callback?code=good-code&state=${encodeURIComponent(hostileState ?? '')}`,
-      { redirect: 'manual', headers: { cookie: cookiesFrom(hostile) } },
-    )
-    assert.equal(home.headers.get('location'), '/')
-
-    const protocolRelative = await fetch(`${base}/auth/google?return=${encodeURIComponent('//evil.example')}`, {
-      redirect: 'manual',
-    })
-    const protocolState = new URL(protocolRelative.headers.get('location') ?? '').searchParams.get('state')
-    const protocolHome = await fetch(
-      `${base}/auth/google/callback?code=good-code&state=${encodeURIComponent(protocolState ?? '')}`,
-      { redirect: 'manual', headers: { cookie: cookiesFrom(protocolRelative) } },
-    )
-    assert.equal(protocolHome.headers.get('location'), '/')
-
-    const joinReturn = await fetch(`${base}/auth/google?return=${encodeURIComponent(`${groupPath}/join`)}`, {
-      redirect: 'manual',
-    })
-    const joinState = new URL(joinReturn.headers.get('location') ?? '').searchParams.get('state')
-    const joinHome = await fetch(
-      `${base}/auth/google/callback?code=good-code&state=${encodeURIComponent(joinState ?? '')}`,
-      { redirect: 'manual', headers: { cookie: cookiesFrom(joinReturn) } },
-    )
-    assert.equal(joinHome.headers.get('location'), '/')
+    const back = await signIn(groupPath)
+    assert.equal(back.status, 303)
+    assert.equal(back.headers.get('location'), groupPath)
+    assert.equal((await signIn('https://evil.example')).headers.get('location'), '/')
+    assert.equal((await signIn('//evil.example')).headers.get('location'), '/')
+    assert.equal((await signIn(`${groupPath}/join`)).headers.get('location'), '/')
   } finally {
     await close(server, db)
   }

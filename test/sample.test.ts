@@ -44,7 +44,7 @@ async function seeded(): Promise<{ db: Database; groupId: GroupId; adaId: string
 
 test('the sample balance matches the figure written next to the seed', async () => {
   const { db, groupId, adaId } = await seeded()
-  const { server, base } = await listen(db, () => asOf)
+  const { server, base } = await listen(db, { today: () => asOf })
   const cookie = `session=${encodeURIComponent(await createSession(db, adaId))}`
   try {
     const ledger = await readLedger(db, groupId, asOf)

@@ -1,6 +1,6 @@
 # 0002: We will sign in with Google
 
-- **Status:** accepted
+- **Status:** superseded by [0006](0006-sign-in-through-firebase-authentication.md)
 - **Date:** 2026-11-06
 
 ## Context

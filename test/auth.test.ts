@@ -1,55 +1,10 @@
 import assert from 'node:assert/strict'
-import { createServer, type Server } from 'node:http'
 import { test } from 'node:test'
-import type { AddressInfo } from 'node:net'
 import { countUsers, upsertAccount } from '../src/accounts.ts'
-import { createApp } from '../src/app.ts'
-import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
-import { parseGoogleUserInfo } from '../src/google.ts'
+import { closeDatabase, openTestDatabase } from '../src/db.ts'
+import type { IdToken } from '../src/identity.ts'
 import { accountForSession, countSessions } from '../src/sessions.ts'
-
-const TOKEN_URL = 'https://oauth2.googleapis.com/token'
-const USERINFO_URL = 'https://www.googleapis.com/oauth2/v3/userinfo'
-
-type Profile = {
-  sub: string
-  email: string
-  email_verified: boolean
-  name: string
-  picture?: string
-}
-
-function googleFetch(profile: () => Profile, seen: { tokenBody: string }) {
-  return (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input)
-    if (url === TOKEN_URL) {
-      seen.tokenBody = String(init?.body ?? '')
-      return new Response(JSON.stringify({ access_token: 'token-from-google' }), { status: 200 })
-    }
-    if (url === USERINFO_URL) {
-      const headers = new Headers(init?.headers)
-      if (headers.get('authorization') !== 'Bearer token-from-google') {
-        return new Response('unauthorized', { status: 401 })
-      }
-      return new Response(JSON.stringify(profile()), { status: 200 })
-    }
-    return new Response('unexpected', { status: 500 })
-  }) as typeof fetch
-}
-
-async function listen(db: Database, profile: () => Profile, seen: { tokenBody: string }) {
-  const app = createApp({
-    db,
-    config: { clientId: 'client-id', clientSecret: 'client-secret' },
-    fetch: googleFetch(profile, seen),
-  })
-  const server = createServer((req, res) => {
-    void app(req, res)
-  })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const address = server.address() as AddressInfo
-  return { server, base: `http://127.0.0.1:${address.port}` }
-}
+import { closeServer, fakeVerifier, googleToken, listen } from './support/fixtures.ts'
 
 function cookiesFrom(response: Response): string {
   const headers = response.headers as Headers & { getSetCookie?: () => string[] }
@@ -67,22 +22,14 @@ function cookieValue(header: string, name: string): string {
   return ''
 }
 
-test('parseGoogleUserInfo reads sub, email, name, and picture', () => {
-  const identity = parseGoogleUserInfo({
-    sub: 'google-sub-1',
-    email: 'ada@example.com',
-    email_verified: true,
-    name: 'Ada',
-    picture: 'https://lh3.googleusercontent.com/a/ada',
+function signIn(base: string, fields: Record<string, string>, headers: Record<string, string> = {}) {
+  return fetch(`${base}/auth/firebase`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers },
+    body: new URLSearchParams(fields).toString(),
   })
-  assert.deepEqual(identity, {
-    sub: 'google-sub-1',
-    email: 'ada@example.com',
-    emailVerified: true,
-    displayName: 'Ada',
-    avatarUrl: 'https://lh3.googleusercontent.com/a/ada',
-  })
-})
+}
 
 test('the same Google ID updates one account', async () => {
   const db = openTestDatabase()
@@ -132,81 +79,62 @@ test('an unverified email does not create an account', async () => {
   await closeDatabase(db)
 })
 
-test('Google sign-in, repeat sign-in, and sign-out', async () => {
+test('Firebase sign-in, repeat sign-in, and sign-out', async () => {
   const db = openTestDatabase()
-  let current: Profile = {
-    sub: 'google-sub-1',
-    email: 'ada@example.com',
-    email_verified: true,
-    name: 'Ada',
-    picture: 'https://lh3.googleusercontent.com/a/ada',
-  }
-  const seen = { tokenBody: '' }
-  const { server, base } = await listen(db, () => current, seen)
+  const tokens = new Map<string, IdToken>([
+    [
+      'ada-1',
+      googleToken('google-sub-1', {
+        email: 'ada@example.com',
+        email_verified: true,
+        name: 'Ada',
+        picture: 'https://lh3.googleusercontent.com/a/ada',
+      }),
+    ],
+    [
+      'ada-2',
+      googleToken('google-sub-1', {
+        email: 'ada.lovelace@example.com',
+        email_verified: true,
+        name: 'Ada Lovelace',
+        picture: 'javascript:alert(1)',
+      }),
+    ],
+  ])
+  const { server, base } = await listen(db, { verifyIdToken: fakeVerifier(tokens) })
   try {
     const home = await fetch(base)
     assert.equal(home.status, 200)
-    assert.match(await home.text(), /Sign in with Google/)
-
-    const start = await fetch(`${base}/auth/google`, { redirect: 'manual' })
-    assert.equal(start.status, 302)
-    const location = new URL(start.headers.get('location') ?? '')
-    assert.equal(location.origin, 'https://accounts.google.com')
-    assert.equal(location.pathname, '/o/oauth2/v2/auth')
-    assert.equal(location.searchParams.get('client_id'), 'client-id')
-    assert.equal(location.searchParams.get('redirect_uri'), `${base}/auth/google/callback`)
-    assert.equal(location.searchParams.get('scope'), 'openid email profile')
-    assert.equal(location.searchParams.get('response_type'), 'code')
-    const state = location.searchParams.get('state')
-    assert.ok(state)
-    const stateCookie = cookiesFrom(start)
-    assert.match(stateCookie, /oauth_state=/)
-
-    const bad = await fetch(`${base}/auth/google/callback?code=nope&state=wrong`, {
-      redirect: 'manual',
-      headers: { cookie: stateCookie },
+    const homeHtml = await home.text()
+    assert.match(homeHtml, /Sign in with Google/)
+    assert.match(homeHtml, /action="\/auth\/firebase"/)
+    const config = /data-firebase="([^"]*)"/.exec(homeHtml)?.[1]?.replaceAll('&quot;', '"')
+    assert.deepEqual(JSON.parse(config ?? ''), {
+      apiKey: 'test-api-key',
+      authDomain: 'friendly-test.firebaseapp.com',
+      projectId: 'demo-friendly-test',
     })
-    assert.equal(bad.status, 400)
-    assert.match(await bad.text(), /did not match/)
-    assert.equal(await countUsers(db), 0)
+    assert.match(homeHtml, /https:\/\/www.gstatic.com\/firebasejs\/13.1.0\/firebase-auth.js/)
 
-    const callback = await fetch(`${base}/auth/google/callback?code=good-code&state=${encodeURIComponent(state)}`, {
-      redirect: 'manual',
-      headers: { cookie: stateCookie },
-    })
-    assert.equal(callback.status, 302)
-    assert.equal(callback.headers.get('location'), '/')
-    assert.match(seen.tokenBody, /code=good-code/)
-    assert.match(seen.tokenBody, /client_secret=client-secret/)
-    const sessionCookie = cookiesFrom(callback)
+    const first = await signIn(base, { idToken: 'ada-1', return: '/groups/new' }, { origin: base })
+    assert.equal(first.status, 303)
+    assert.equal(first.headers.get('location'), '/groups/new')
+    const sessionCookie = cookiesFrom(first)
     assert.match(sessionCookie, /session=/)
-
-    const signedIn = await fetch(base, { headers: { cookie: sessionCookie } })
-    const signedInHtml = await signedIn.text()
-    assert.match(signedInHtml, /Ada/)
-    assert.match(signedInHtml, /ada@example.com/)
-    assert.match(signedInHtml, /https:\/\/lh3.googleusercontent.com\/a\/ada/)
-    assert.match(signedInHtml, /Sign out/)
     assert.equal(await countUsers(db), 1)
     assert.equal(await countSessions(db), 1)
 
-    current = {
-      sub: 'google-sub-1',
-      email: 'ada.lovelace@example.com',
-      email_verified: true,
-      name: 'Ada Lovelace',
-      picture: 'javascript:alert(1)',
-    }
-    const again = await fetch(`${base}/auth/google`, { redirect: 'manual' })
-    const againState = new URL(again.headers.get('location') ?? '').searchParams.get('state')
-    const againCookie = cookiesFrom(again)
-    const againCallback = await fetch(
-      `${base}/auth/google/callback?code=second&state=${encodeURIComponent(againState ?? '')}`,
-      { redirect: 'manual', headers: { cookie: againCookie } },
-    )
-    const nextSession = cookiesFrom(againCallback)
-    const updated = await fetch(base, { headers: { cookie: nextSession } })
-    const updatedHtml = await updated.text()
+    const signedInHtml = await (await fetch(base, { headers: { cookie: sessionCookie } })).text()
+    assert.match(signedInHtml, /Hello, Ada/)
+    assert.match(signedInHtml, /ada@example.com/)
+    assert.match(signedInHtml, /https:\/\/lh3.googleusercontent.com\/a\/ada/)
+    assert.match(signedInHtml, /Sign out/)
+
+    const again = await signIn(base, { idToken: 'ada-2', return: '' })
+    assert.equal(again.status, 303)
+    assert.equal(again.headers.get('location'), '/')
+    const nextSession = cookiesFrom(again)
+    const updatedHtml = await (await fetch(base, { headers: { cookie: nextSession } })).text()
     assert.match(updatedHtml, /Ada Lovelace/)
     assert.match(updatedHtml, /ada.lovelace@example.com/)
     assert.doesNotMatch(updatedHtml, /javascript:alert/)
@@ -220,35 +148,71 @@ test('Google sign-in, repeat sign-in, and sign-out', async () => {
       headers: { cookie: nextSession },
     })
     assert.equal(logout.status, 302)
-    const cleared = cookiesFrom(logout)
-    const after = await fetch(base, { headers: { cookie: cleared } })
+    const after = await fetch(base, { headers: { cookie: cookiesFrom(logout) } })
     assert.match(await after.text(), /Sign in with Google/)
-    assert.equal(await accountForSession(db, decodeURIComponent(loggedOutToken)), null)
+    assert.equal(await accountForSession(db, loggedOutToken), null)
     assert.equal(await countUsers(db), 1)
     assert.equal(await countSessions(db), 1)
   } finally {
-    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+    await closeServer(server)
     await closeDatabase(db)
   }
 })
 
-test('missing Google credentials do not start a redirect', async () => {
+test('a sign-in Firebase or Google does not vouch for makes no account and no session', async () => {
   const db = openTestDatabase()
-  const app = createApp({
-    db,
-    config: { clientId: '', clientSecret: '' },
-  })
-  const server: Server = createServer((req, res) => {
-    void app(req, res)
-  })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+  const ada = { email: 'ada@example.com', email_verified: true, name: 'Ada' }
+  const tokens = new Map<string, IdToken>([
+    ['ada', googleToken('google-sub-1', ada)],
+    ['unverified', googleToken('google-sub-2', { ...ada, email_verified: false })],
+    ['password', { ...ada, firebase: { sign_in_provider: 'password', identities: { email: ['ada@example.com'] } } }],
+  ])
+  const { server, base } = await listen(db, { verifyIdToken: fakeVerifier(tokens) })
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/auth/google`, { redirect: 'manual' })
-    assert.equal(response.status, 500)
-    assert.match(await response.text(), /GOOGLE_CLIENT_ID/)
+    const forged = await signIn(base, { idToken: 'forged', return: '/' })
+    assert.equal(forged.status, 400)
+    assert.match(await forged.text(), /not valid or has expired/)
+
+    const empty = await signIn(base, { return: '/' })
+    assert.equal(empty.status, 400)
+    assert.match(await empty.text(), /not valid or has expired/)
+
+    const password = await signIn(base, { idToken: 'password' })
+    assert.equal(password.status, 400)
+    assert.match(await password.text(), /Sign in with a Google account/)
+
+    const unverified = await signIn(base, { idToken: 'unverified' })
+    assert.equal(unverified.status, 400)
+    assert.match(await unverified.text(), /did not confirm the email/)
+
+    const crossSite = await signIn(base, { idToken: 'ada' }, { origin: 'https://evil.example' })
+    assert.equal(crossSite.status, 403)
+    assert.match(await crossSite.text(), /came from another site/)
+
+    for (const response of [forged, empty, password, unverified, crossSite]) {
+      assert.doesNotMatch(cookiesFrom(response), /session=/)
+    }
+    assert.equal(await countUsers(db), 0)
+    assert.equal(await countSessions(db), 0)
+
+    const looked = await fetch(`${base}/auth/firebase`, { redirect: 'manual' })
+    assert.equal(looked.status, 405)
   } finally {
-    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+    await closeServer(server)
+    await closeDatabase(db)
+  }
+})
+
+test('missing Firebase config says what to set instead of a sign-in button', async () => {
+  const db = openTestDatabase()
+  const { server, base } = await listen(db, { firebase: null })
+  try {
+    const html = await (await fetch(base)).text()
+    assert.match(html, /Sign-in is not configured. Set FIREBASE_API_KEY and FIREBASE_AUTH_DOMAIN./)
+    assert.doesNotMatch(html, /data-firebase=/)
+    assert.doesNotMatch(html, /Sign in with Google<\/button>/)
+  } finally {
+    await closeServer(server)
     await closeDatabase(db)
   }
 })

@@ -1,14 +1,18 @@
 # Friendly challenges
 
-Friends share a habit challenge. This app signs a person in with Google and stores one account per Google ID.
+Friends share a habit challenge. This app signs a person in with Google through Firebase Authentication and stores one account per Google ID.
 
 ## Run
 
 The app stores its data in Cloud Firestore. Local runs use the Firestore emulator, which needs Java 11 or later. Run `npm install` first.
 
-Copy `.env.example` to `.env` and fill in the Google OAuth client. The app reads `.env` when that file is present. In the Google client, register this redirect URI.
+Sign-in goes through Firebase Authentication. There is no OAuth client and no redirect URI to register. Set it up once in the [Firebase console](https://console.firebase.google.com).
 
-`http://127.0.0.1:3000/auth/google/callback`
+1. Open **Authentication > Sign-in method** and enable **Google**.
+2. Open **Authentication > Settings > Authorized domains**. `localhost` is there by default. Add your site's domain when you host it.
+3. Open **Project settings > General > Your apps** and add a Web app. Its config shows `apiKey` and `authDomain`.
+
+Copy `.env.example` to `.env`. Set `FIREBASE_API_KEY` and `FIREBASE_AUTH_DOMAIN` from the Web app config, and `FIREBASE_PROJECT_ID` to the project ID. The app reads `.env` when that file is present. Without the first two, the sign-in screen says sign-in is not configured.
 
 Then start the app on the emulator.
 
@@ -16,7 +20,7 @@ Then start the app on the emulator.
 npm run dev
 ```
 
-Open `http://127.0.0.1:3000`. Sign in with Google. The page shows your name, email, and avatar. Sign out. The account stays. The session does not.
+Open `http://localhost:3000`. Use `localhost`, not `127.0.0.1`, because only `localhost` is an authorized domain by default. Sign in with Google. A Google popup opens. The page then shows your name, email, and avatar. Sign out. The account stays. The session does not.
 
 Signing in again with the same Google account updates that account. It does not create a second user.
 
@@ -24,11 +28,11 @@ The emulator starts empty each time, then loads the sample group.
 
 ## Host
 
-On the host, `npm start` talks to a real Firestore database. Create a Firebase project with Firestore, create a service account key, and put the whole key JSON in `FIREBASE_SERVICE_ACCOUNT`. `npm run build` loads the sample group into that database. Deploy `firestore.rules` with `firebase deploy --only firestore:rules` so no browser client can read or write. Only the server talks to Firestore.
+On the host, `npm start` talks to a real Firestore database. Create a Firebase project with Firestore, create a service account key, and put the whole key JSON in `FIREBASE_SERVICE_ACCOUNT`. The project ID comes from that key. Set `FIREBASE_API_KEY` and `FIREBASE_AUTH_DOMAIN` too, and add the host's domain under **Authentication > Settings > Authorized domains**. `npm run build` loads the sample group into that database. Deploy `firestore.rules` with `firebase deploy --only firestore:rules` so no browser client can read or write. Only the server talks to Firestore.
 
 ## Netlify
 
-`netlify.toml` sends every path to the function in `netlify/functions/app.ts`, which runs the same app. Set `FIREBASE_SERVICE_ACCOUNT`, `GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET` in the site's environment variables, scoped to Functions and Builds. In the Google client, register `https://<site>.netlify.app/auth/google/callback`.
+`netlify.toml` sends every path to the function in `netlify/functions/app.ts`, which runs the same app. Set `FIREBASE_SERVICE_ACCOUNT`, `FIREBASE_API_KEY`, and `FIREBASE_AUTH_DOMAIN` in the site's environment variables, scoped to Functions and Builds. Add `<site>.netlify.app`, and any custom domain, under **Authentication > Settings > Authorized domains**.
 
 ## Groups
 
@@ -76,4 +80,10 @@ A new database loads one group named Pantry. Ada, Bea, and Cam share a no-sugar 
 npm test
 ```
 
-The tests run on the Firestore emulator, and each test opens an empty project of its own. They stand in for Google's token and userinfo endpoints. They check the redirect to Google, the account fields from `sub`, a second sign-in for the same `sub`, and sign-out.
+The tests run on the Firestore emulator, and each test opens an empty project of its own. They stand in for Firebase Authentication with a fake ID token verifier. They check the account fields from the Google `sub`, a second sign-in for the same `sub`, rejected tokens, a sign-in posted from another site, and sign-out.
+
+```bash
+npm run check:auth
+```
+
+This runs the real token check once against the Firebase Authentication emulator. It makes a Google user in the emulator, posts its ID token to the app, and checks that the home page shows that user.

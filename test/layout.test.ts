@@ -11,17 +11,22 @@ const account = {
   avatarUrl: 'https://lh3.googleusercontent.com/a/ada',
 }
 
+const signedOut = {
+  state: 'signed_out',
+  firebase: { apiKey: 'key', authDomain: 'friendly.firebaseapp.com', projectId: 'friendly' },
+} as const
+
 test('every page is the same phone shell', () => {
   const groupId = parseGroupId('00000000-0000-4000-8000-000000000001')
   if (!groupId) throw new Error('fixture group id')
   const pages = [
-    renderHome({ state: 'signed_out' }),
+    renderHome(signedOut),
     renderHome({ state: 'signed_in', account, groups: [], heatmaps: [] }),
-    renderNewGroup({ state: 'signed_out' }),
+    renderNewGroup(signedOut),
     renderNewGroup({ state: 'signed_in', account }),
     renderGroup(
       { kind: 'preview', groupId, name: 'Morning run', activeCount: 1, headline: null },
-      { state: 'signed_out' },
+      signedOut,
       'http://127.0.0.1:3000',
     ),
     renderMessage('Not found', 'That page does not exist.'),
@@ -47,7 +52,7 @@ test('every page is the same phone shell', () => {
 })
 
 test('signed-out shell keeps Google sign-in on the phone screens', () => {
-  const html = renderHome({ state: 'signed_out' })
+  const html = renderHome(signedOut)
   assert.match(html, /Sign in with Google/)
   assert.match(html, /href="#home"/)
   assert.match(html, /href="#account"/)

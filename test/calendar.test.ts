@@ -161,7 +161,7 @@ function heatmapMarks(html: string): Record<string, string> {
 test('replacing a check-in updates the group calendar and the home heatmap', async () => {
   const { db, ada, grace, groupId } = await activeCrew()
   const adaCookie = await cookieFor(db, ada)
-  const { server, base } = await listen(db, () => iso('2026-11-04'))
+  const { server, base } = await listen(db, { today: () => iso('2026-11-04') })
   const groupPath = `/groups/${groupId}`
   const page = async (path: string) => (await fetch(`${base}${path}`, { headers: { cookie: adaCookie } })).text()
   const log = (day: string, color: string) =>

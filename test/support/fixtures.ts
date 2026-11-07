@@ -2,11 +2,10 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { FieldPath } from 'firebase-admin/firestore'
 import { upsertAccount } from '../../src/accounts.ts'
-import { createApp } from '../../src/app.ts'
-import type { IsoDate } from '../../src/challenge.ts'
+import { createApp, type AppDeps } from '../../src/app.ts'
 import type { Database } from '../../src/db.ts'
 import { createGroup, joinGroup, type GroupId } from '../../src/groups.ts'
-import type { Account } from '../../src/identity.ts'
+import type { Account, FirebaseWebConfig, IdToken } from '../../src/identity.ts'
 import { createSession } from '../../src/sessions.ts'
 import { groupRef, readGroup } from '../../src/store.ts'
 
@@ -54,8 +53,30 @@ export async function cookieFor(db: Database, account: Account): Promise<string>
   return `session=${encodeURIComponent(await createSession(db, account.id))}`
 }
 
-export async function listen(db: Database, today?: () => IsoDate): Promise<{ server: Server; base: string }> {
-  const app = createApp({ db, config: { clientId: 'client-id', clientSecret: 'client-secret' }, today })
+export const testFirebase: FirebaseWebConfig = {
+  apiKey: 'test-api-key',
+  authDomain: 'friendly-test.firebaseapp.com',
+  projectId: 'demo-friendly-test',
+}
+
+export function googleToken(sub: string, claims: Omit<IdToken, 'firebase'>): IdToken {
+  return { ...claims, firebase: { sign_in_provider: 'google.com', identities: { 'google.com': [sub] } } }
+}
+
+// Stands in for Firebase Authentication: only the tokens in the map verify.
+export function fakeVerifier(tokens: Map<string, IdToken>): (token: string) => Promise<IdToken> {
+  return async (token) => {
+    const claims = tokens.get(token)
+    if (!claims) throw new Error('Firebase ID token has invalid signature.')
+    return claims
+  }
+}
+
+export async function listen(
+  db: Database,
+  deps: Partial<Omit<AppDeps, 'db'>> = {},
+): Promise<{ server: Server; base: string }> {
+  const app = createApp({ db, firebase: testFirebase, ...deps })
   const server = createServer((req, res) => {
     void app(req, res)
   })

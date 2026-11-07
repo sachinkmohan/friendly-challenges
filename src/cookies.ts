@@ -1,5 +1,3 @@
-import { timingSafeEqual } from 'node:crypto'
-
 export function readCookie(header: string | undefined, name: string): string | null {
   if (!header) return null
   for (const part of header.split(';')) {
@@ -24,11 +22,4 @@ export function writeCookie(name: string, value: string, maxAgeSeconds: number):
 
 export function clearCookie(name: string): string {
   return writeCookie(name, '', 0)
-}
-
-export function secretsMatch(left: string, right: string): boolean {
-  const a = Buffer.from(left)
-  const b = Buffer.from(right)
-  if (a.length !== b.length) return false
-  return timingSafeEqual(a, b)
 }

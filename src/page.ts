@@ -20,7 +20,7 @@ import { DAY_MARK_LABELS, type GroupCalendar, type Heatmap, type MarkedDay } fro
 import { dropoutFailureCopy, type DropoutFailure, type DropoutInput } from './dropouts.ts'
 import { CHECK_IN_LABELS, checkInFailureCopy, type CheckIn, type CheckInFailure } from './checkins.ts'
 import { parseGroupId, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
-import { authFailureCopy, type Account, type AuthFailure, type Viewer } from './identity.ts'
+import { authFailureCopy, type Account, type AuthFailure, type FirebaseWebConfig, type Viewer } from './identity.ts'
 
 function escapeHtml(value: string): string {
   return value
@@ -260,6 +260,7 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
       touch-action: manipulation;
     }
     a.button:active, button:active { transform: scale(0.98); }
+    .sign-in-error { margin-top: 8px; color: #b3392f; }
     .tabbar {
       flex: none;
       display: flex;
@@ -340,6 +341,40 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
     window.addEventListener('hashchange', applyScreen)
     applyScreen()
   </script>
+  <script type="module">
+    const forms = document.querySelectorAll('form.sign-in')
+    const showError = (form, text) => {
+      const error = form.querySelector('.sign-in-error')
+      error.textContent = text
+      error.hidden = false
+    }
+    if (forms.length > 0) {
+      try {
+        const [{ initializeApp }, { getAuth, GoogleAuthProvider, signInWithPopup, signOut }] = await Promise.all([
+          import('https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js'),
+          import('https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js'),
+        ])
+        const auth = getAuth(initializeApp(JSON.parse(forms[0].dataset.firebase)))
+        forms.forEach((form) => {
+          form.querySelector('button').addEventListener('click', async () => {
+            form.querySelector('.sign-in-error').hidden = true
+            const provider = new GoogleAuthProvider()
+            provider.setCustomParameters({ prompt: 'select_account' })
+            try {
+              const result = await signInWithPopup(auth, provider)
+              form.elements.idToken.value = await result.user.getIdToken()
+              await signOut(auth)
+              form.submit()
+            } catch {
+              showError(form, 'Sign-in did not finish. Try again.')
+            }
+          })
+        })
+      } catch {
+        forms.forEach((form) => showError(form, 'Google sign-in could not load. Reload the page.'))
+      }
+    }
+  </script>
 </body>
 </html>
 `
@@ -361,7 +396,7 @@ const paymentSuffix = '/payment'
 const dropoutSuffix = '/dropout'
 
 export type HomePage =
-  | { state: 'signed_out' }
+  | Extract<Viewer, { state: 'signed_out' }>
   | { state: 'signed_in'; account: Account; groups: readonly HomeGroup[]; heatmaps: readonly Heatmap[] }
 
 export type GroupRoute =
@@ -384,8 +419,14 @@ function activeCountText(count: number): string {
   return `${count} active`
 }
 
-function googleReturnHref(returnPath: string): string {
-  return `/auth/google?return=${encodeURIComponent(returnPath)}`
+function signInControl(firebase: FirebaseWebConfig | null, returnPath: string): string {
+  if (!firebase) return '<p>Sign-in is not configured. Set FIREBASE_API_KEY and FIREBASE_AUTH_DOMAIN.</p>'
+  return `<form class="sign-in" method="post" action="/auth/firebase" data-firebase="${escapeHtml(JSON.stringify(firebase))}">
+      <input type="hidden" name="return" value="${escapeHtml(returnPath)}">
+      <input type="hidden" name="idToken">
+      <button type="button">Sign in with Google</button>
+      <p class="sign-in-error" role="alert" hidden></p>
+    </form>`
 }
 
 function routeSuffix(
@@ -486,20 +527,20 @@ function heatmapGrid(heatmap: Heatmap): string {
   return `${title}<div class="grid-scroll"><table class="grid heatmap" data-group="${escapeHtml(heatmap.groupId)}"><tbody>${rows}</tbody></table></div>`
 }
 
-function signedOutScreens(): string {
+function signedOutScreens(firebase: FirebaseWebConfig | null): string {
   return `
     <section id="home" class="screen">
       <article class="card">
         <h2>Sign in</h2>
         <p>Sign in with the Google account you will use for your group.</p>
-        <a class="button" href="/auth/google">Sign in with Google</a>
+        ${signInControl(firebase, '/')}
       </article>
     </section>
     <section id="account" class="screen">
       <article class="card">
         <h2>Account</h2>
         <p>No account on this device yet. Google sign-in stores one account for this app.</p>
-        <a class="button" href="/auth/google">Sign in with Google</a>
+        ${signInControl(firebase, '/')}
       </article>
     </section>
   `
@@ -535,7 +576,7 @@ function signedInScreens(account: Account, groups: readonly HomeGroup[], heatmap
 }
 
 export function renderHome(page: HomePage): string {
-  const screens = page.state === 'signed_out' ? signedOutScreens() : signedInScreens(page.account, page.groups, page.heatmaps)
+  const screens = page.state === 'signed_out' ? signedOutScreens(page.firebase) : signedInScreens(page.account, page.groups, page.heatmaps)
   return frame(screens, tabBar('#home', '#account'))
 }
 
@@ -552,11 +593,10 @@ function groupCard(body: string): string {
 
 export function renderNewGroup(viewer: Viewer, error?: 'name_empty' | 'name_too_long'): string {
   if (viewer.state === 'signed_out') {
-    const href = escapeHtml(googleReturnHref(`${groupsRoot}/new`))
     return groupCard(`
       <h2>Create a group</h2>
       <p>Sign in to create a group.</p>
-      <a class="button" href="${href}">Sign in with Google</a>
+      ${signInControl(viewer.firebase, `${groupsRoot}/new`)}
     `)
   }
   const message =
@@ -879,10 +919,7 @@ function memberItem(member: MemberLine, rhythms: readonly RhythmLine[]): string 
 }
 
 function joinControl(groupId: GroupId, viewer: Viewer): string {
-  if (viewer.state === 'signed_out') {
-    const href = escapeHtml(googleReturnHref(groupHref(groupId)))
-    return `<a class="button" href="${href}">Sign in with Google</a>`
-  }
+  if (viewer.state === 'signed_out') return signInControl(viewer.firebase, groupHref(groupId))
   const action = escapeHtml(`${groupHref(groupId)}${joinSuffix}`)
   return `<form method="post" action="${action}"><button type="submit">Join group</button></form>`
 }

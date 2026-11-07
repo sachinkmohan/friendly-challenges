@@ -193,7 +193,7 @@ test('the group card records a dropout and the leaver keeps a calendar row with 
   const graceCookie = await cookieFor(db, grace)
   const linCookie = await cookieFor(db, lin)
   const noorCookie = await cookieFor(db, await person(db, 'Noor'))
-  const { server, base } = await listen(db, () => today)
+  const { server, base } = await listen(db, { today: () => today })
   const groupPath = `/groups/${groupId}`
   const dropoutPath = `${groupPath}/dropout`
   const page = async (cookie: string) => (await fetch(`${base}${groupPath}`, { headers: { cookie } })).text()

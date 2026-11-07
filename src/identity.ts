@@ -14,22 +14,46 @@ export type Account = {
   avatarUrl: string | null
 }
 
+export type FirebaseWebConfig = {
+  apiKey: string
+  authDomain: string
+  projectId: string
+}
+
 export type Viewer =
-  | { state: 'signed_out' }
+  | { state: 'signed_out'; firebase: FirebaseWebConfig | null }
   | { state: 'signed_in'; account: Account }
 
-export type AuthFailure =
-  | 'missing_client'
-  | 'denied'
-  | 'bad_state'
-  | 'google_rejected'
-  | 'unverified_email'
+export type IdToken = {
+  email?: string
+  email_verified?: boolean
+  name?: unknown
+  picture?: string
+  firebase: { sign_in_provider: string; identities: Record<string, unknown> }
+}
+
+export function googleIdentity(token: IdToken): GoogleIdentity | null {
+  if (token.firebase.sign_in_provider !== 'google.com') return null
+  const subs = token.firebase.identities['google.com']
+  const sub = Array.isArray(subs) ? subs[0] : undefined
+  if (typeof sub !== 'string' || sub === '') return null
+  const email = token.email ?? ''
+  const displayName =
+    typeof token.name === 'string' && token.name.trim() !== '' ? token.name : email.slice(0, email.indexOf('@'))
+  return {
+    sub,
+    email,
+    emailVerified: token.email_verified === true,
+    displayName,
+    avatarUrl: typeof token.picture === 'string' ? token.picture : null,
+  }
+}
+
+export type AuthFailure = 'cross_origin' | 'bad_token' | 'not_google' | 'unverified_email'
 
 export const authFailureCopy: Record<AuthFailure, string> = {
-  missing_client:
-    'Google sign-in is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.',
-  denied: 'Google did not grant access.',
-  bad_state: 'This sign-in attempt did not match the one this browser started. Try again.',
-  google_rejected: 'Google did not accept the sign-in code.',
+  cross_origin: 'This sign-in came from another site.',
+  bad_token: 'The sign-in was not valid or has expired. Try again.',
+  not_google: 'Sign in with a Google account.',
   unverified_email: 'Google did not confirm the email on this account.',
 }

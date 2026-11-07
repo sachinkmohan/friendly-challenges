@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { createApp } from './app.ts'
-import { openDatabase } from './db.ts'
+import { firebaseWebConfig, openDatabase } from './db.ts'
 import { loadSample } from './sample.ts'
 
 const parsedPort = Number(process.env.PORT)
@@ -9,10 +9,7 @@ const db = openDatabase()
 await loadSample(db)
 const app = createApp({
   db,
-  config: {
-    clientId: process.env.GOOGLE_CLIENT_ID ?? '',
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
-  },
+  firebase: firebaseWebConfig(db),
 })
 
 const server = createServer((req, res) => {

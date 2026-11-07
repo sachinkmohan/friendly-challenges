@@ -1,9 +1,8 @@
-import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { Database } from './db.ts'
+import { authFor, type Database } from './db.ts'
 import { upsertAccount } from './accounts.ts'
 import { readLedger, recordPayment, type PaymentFailure, type PaymentInput } from './balances.ts'
-import { clearCookie, readCookie, secretsMatch, writeCookie } from './cookies.ts'
+import { clearCookie, readCookie, writeCookie } from './cookies.ts'
 import {
   readChallengeHeadline,
   readMemberChallenge,
@@ -19,8 +18,7 @@ import type { IsoDate } from './challenge.ts'
 import { listCheckIns, logCheckIn, type CheckInInput } from './checkins.ts'
 import { recordDropout, type DropoutFailure, type DropoutInput } from './dropouts.ts'
 import { createGroup, joinGroup, listHomeGroups, viewGroup, type GroupId } from './groups.ts'
-import { authorizeUrl, exchangeCode, type GoogleConfig } from './google.ts'
-import type { Account, AuthFailure, Viewer } from './identity.ts'
+import { googleIdentity, type Account, type AuthFailure, type FirebaseWebConfig, type IdToken, type Viewer } from './identity.ts'
 import {
   groupHref,
   matchGroupPath,
@@ -36,16 +34,13 @@ import {
 import { accountForSession, createSession, deleteSession } from './sessions.ts'
 
 const SESSION_COOKIE = 'session'
-const STATE_COOKIE = 'oauth_state'
-const RETURN_COOKIE = 'return_to'
-const STATE_MAX_AGE = 600
 const SESSION_MAX_AGE = 60 * 60 * 24 * 30
 const FORM_LIMIT_BYTES = 4096
 
 export type AppDeps = {
   db: Database
-  config: GoogleConfig
-  fetch?: typeof fetch
+  firebase: FirebaseWebConfig | null
+  verifyIdToken?: (token: string) => Promise<IdToken>
   today?: () => IsoDate
 }
 
@@ -56,10 +51,6 @@ function requestOrigin(req: IncomingMessage): string {
   const encrypted = Boolean((req.socket as { encrypted?: boolean }).encrypted)
   const proto = header === 'https' || header === 'http' ? header : encrypted ? 'https' : 'http'
   return `${proto}://${host}`
-}
-
-function redirectUri(origin: string): string {
-  return `${origin}/auth/google/callback`
 }
 
 function sendHtml(res: ServerResponse, status: number, body: string, cookies: string[] = []): void {
@@ -80,10 +71,10 @@ function sendRedirect(res: ServerResponse, location: string, cookies: string[] =
   res.end()
 }
 
-async function viewerFrom(req: IncomingMessage, db: Database): Promise<Viewer> {
+async function viewerFrom(req: IncomingMessage, deps: AppDeps): Promise<Viewer> {
   const token = readCookie(req.headers.cookie, SESSION_COOKIE)
-  const account = await accountForSession(db, token)
-  if (!account) return { state: 'signed_out' }
+  const account = await accountForSession(deps.db, token)
+  if (!account) return { state: 'signed_out', firebase: deps.firebase }
   return { state: 'signed_in', account }
 }
 
@@ -92,7 +83,7 @@ function today(deps: AppDeps): IsoDate {
 }
 
 export function createApp(deps: AppDeps) {
-  const fetchImpl = deps.fetch ?? fetch
+  const verifyIdToken = deps.verifyIdToken ?? ((token: string) => authFor(deps.db).verifyIdToken(token))
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const origin = requestOrigin(req)
     const url = new URL(req.url ?? '/', `${origin}/`)
@@ -101,7 +92,7 @@ export function createApp(deps: AppDeps) {
 
     try {
       if (method === 'GET' && path === '/') {
-        const viewer = await viewerFrom(req, deps.db)
+        const viewer = await viewerFrom(req, deps)
         const home =
           viewer.state === 'signed_out'
             ? renderHome(viewer)
@@ -121,40 +112,22 @@ export function createApp(deps: AppDeps) {
         return
       }
 
-      if (method === 'GET' && path === '/auth/google') {
-        if (deps.config.clientId === '' || deps.config.clientSecret === '') {
-          sendHtml(res, 500, renderFailure('missing_client'))
+      if (path === '/auth/firebase') {
+        if (method !== 'POST') return rejectMethod(res, 'POST')
+        const sentFrom = req.headers.origin
+        if (sentFrom !== undefined && sentFrom !== origin) {
+          req.resume()
+          sendHtml(res, 403, renderFailure('cross_origin'))
           return
         }
-        const state = randomBytes(32).toString('base64url')
-        const location = authorizeUrl({
-          clientId: deps.config.clientId,
-          redirectUri: redirectUri(origin),
-          state,
-        })
-        const returnTo = safeReturnPath(url.searchParams.get('return'))
-        sendRedirect(res, location, [
-          writeCookie(STATE_COOKIE, state, STATE_MAX_AGE),
-          writeCookie(RETURN_COOKIE, returnTo, STATE_MAX_AGE),
-        ])
-        return
-      }
-
-      if (method === 'GET' && path === '/auth/google/callback') {
-        const signIn = await finishGoogleSignIn(req, url, origin, deps, fetchImpl)
-        const returnTo = safeReturnPath(readCookie(req.headers.cookie, RETURN_COOKIE))
-        if (signIn.kind === 'error') {
-          sendHtml(res, signIn.status, renderFailure(signIn.failure), [
-            clearCookie(STATE_COOKIE),
-            clearCookie(RETURN_COOKIE),
-          ])
+        const form = await readForm(req)
+        if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
+        const signIn = await signInWithIdToken(deps.db, verifyIdToken, form.get('idToken') ?? '')
+        if (!signIn.ok) {
+          sendHtml(res, 400, renderFailure(signIn.failure))
           return
         }
-        sendRedirect(res, returnTo, [
-          clearCookie(STATE_COOKIE),
-          clearCookie(RETURN_COOKIE),
-          writeCookie(SESSION_COOKIE, signIn.token, SESSION_MAX_AGE),
-        ])
+        sendRedirect(res, safeReturnPath(form.get('return')), [writeCookie(SESSION_COOKIE, signIn.token, SESSION_MAX_AGE)], 303)
         return
       }
 
@@ -191,7 +164,7 @@ async function handleGroup(
   route: GroupRoute,
   deps: AppDeps,
 ): Promise<void> {
-  const viewer = await viewerFrom(req, deps.db)
+  const viewer = await viewerFrom(req, deps)
   if (route.kind === 'new') {
     if (method !== 'GET') return rejectMethod(res, 'GET')
     sendHtml(res, 200, renderNewGroup(viewer))
@@ -304,7 +277,7 @@ async function sendGroupPage(
     return
   }
   const headline = await readChallengeHeadline(deps.db, groupId)
-  const viewer: Viewer = account ? { state: 'signed_in', account } : { state: 'signed_out' }
+  const viewer: Viewer = account ? { state: 'signed_in', account } : { state: 'signed_out', firebase: deps.firebase }
   sendHtml(res, status, renderGroup({ ...view, headline }, viewer, origin, attempt))
 }
 
@@ -567,34 +540,16 @@ async function readForm(req: IncomingMessage): Promise<URLSearchParams | 'too_la
   return new URLSearchParams(Buffer.concat(chunks).toString('utf8'))
 }
 
-type SignInResult =
-  | { kind: 'ok'; token: string }
-  | { kind: 'error'; status: number; failure: AuthFailure }
-
-async function finishGoogleSignIn(
-  req: IncomingMessage,
-  url: URL,
-  origin: string,
-  deps: AppDeps,
-  fetchImpl: typeof fetch,
-): Promise<SignInResult> {
-  if (url.searchParams.get('error')) {
-    return { kind: 'error', status: 400, failure: 'denied' }
-  }
-  const code = url.searchParams.get('code')
-  const state = url.searchParams.get('state')
-  const saved = readCookie(req.headers.cookie, STATE_COOKIE)
-  if (!code || !state || !saved || !secretsMatch(state, saved)) {
-    return { kind: 'error', status: 400, failure: 'bad_state' }
-  }
-  const exchanged = await exchangeCode(
-    deps.config,
-    { code, redirectUri: redirectUri(origin) },
-    fetchImpl,
-  )
-  if (!exchanged.ok) return { kind: 'error', status: 400, failure: exchanged.failure }
-  const savedAccount = await upsertAccount(deps.db, exchanged.identity)
-  if (!savedAccount.ok) return { kind: 'error', status: 400, failure: savedAccount.failure }
-  const token = await createSession(deps.db, savedAccount.account.id)
-  return { kind: 'ok', token }
+async function signInWithIdToken(
+  db: Database,
+  verifyIdToken: (token: string) => Promise<IdToken>,
+  idToken: string,
+): Promise<{ ok: true; token: string } | { ok: false; failure: AuthFailure }> {
+  const claims = idToken === '' ? null : await verifyIdToken(idToken).catch(() => null)
+  if (!claims) return { ok: false, failure: 'bad_token' }
+  const identity = googleIdentity(claims)
+  if (!identity) return { ok: false, failure: 'not_google' }
+  const saved = await upsertAccount(db, identity)
+  if (!saved.ok) return { ok: false, failure: saved.failure }
+  return { ok: true, token: await createSession(db, saved.account.id) }
 }

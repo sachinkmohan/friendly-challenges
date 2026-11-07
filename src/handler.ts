@@ -28,19 +28,16 @@ function openOnce() {
 }
 
 async function openApp(): Promise<App> {
-  const { openDatabase } = await import('./db.ts')
+  const { firebaseWebConfig, openDatabase } = await import('./db.ts')
   const { loadSample } = await import('./sample.ts')
   const { createApp } = await import('./app.ts')
   const db = openDatabase()
   await loadSample(db)
   const port = process.env.PORT ?? '3000'
-  const origin = process.env.APP_ORIGIN ?? `http://127.0.0.1:${port}`
+  const origin = process.env.APP_ORIGIN ?? `http://localhost:${port}`
   console.log(`Friendly challenges at ${origin}`)
   return createApp({
     db,
-    config: {
-      clientId: process.env.GOOGLE_CLIENT_ID ?? '',
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
-    },
+    firebase: firebaseWebConfig(db),
   })
 }

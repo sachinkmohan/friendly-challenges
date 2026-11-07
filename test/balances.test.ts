@@ -236,7 +236,7 @@ test('a payment is always in the challenge currency and can go to a member who l
 test('the group card shows each net and who owes whom, and a recorded payment changes them', async () => {
   const { db, ada, grace, lin, groupId } = await crew()
   const linCookie = await cookieFor(db, lin)
-  const { server, base } = await listen(db, () => iso('2026-11-04'))
+  const { server, base } = await listen(db, { today: () => iso('2026-11-04') })
   const groupPath = `/groups/${groupId}`
   const page = async () => (await fetch(`${base}${groupPath}`, { headers: { cookie: linCookie } })).text()
   const pay = (fields: Record<string, string>) =>
