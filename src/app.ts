@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { Database } from './db.ts'
+import type { Database } from './hosted-db.ts'
 import { upsertAccount } from './accounts.ts'
 import { readLedger, recordPayment, type PaymentFailure, type PaymentInput } from './balances.ts'
 import { clearCookie, readCookie, secretsMatch, writeCookie } from './cookies.ts'

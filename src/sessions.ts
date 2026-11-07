@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import type { Database } from './db.ts'
+import type { Database } from './hosted-db.ts'
 import type { Account } from './identity.ts'
 
 type AccountRow = {

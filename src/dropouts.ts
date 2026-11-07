@@ -1,4 +1,4 @@
-import type { Database } from './db.ts'
+import type { Database } from './hosted-db.ts'
 import { parseIsoDate, type IsoDate } from './challenge.ts'
 import type { GroupId } from './groups.ts'
 import type { Account } from './identity.ts'
