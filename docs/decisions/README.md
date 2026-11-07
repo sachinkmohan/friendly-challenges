@@ -8,3 +8,4 @@ These records follow the template at <https://kcd-slides-bwk-adrs-for-agents.pag
 - [0004 We will draw every page as a phone](0004-draw-every-page-as-a-phone.md). Accepted.
 - [0005 We will use Cloud Firestore](0005-use-firestore.md). Accepted.
 - [0006 We will sign in through Firebase Authentication](0006-sign-in-through-firebase-authentication.md). Accepted.
+- [0007 We will deploy on Netlify as one function](0007-deploy-on-netlify.md). Accepted.
