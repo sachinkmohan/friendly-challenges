@@ -131,7 +131,7 @@ test('an unverified email does not create an account', async () => {
   })
   assert.deepEqual(result, { ok: false, failure: 'unverified_email' })
   assert.equal(await countUsers(db), 0)
-  await db.exec(readFileSync(new URL('../db/001_accounts.sql', import.meta.url), 'utf8'))
+  await db.exec(readFileSync(new URL('../migrations/001_accounts.sql', import.meta.url), 'utf8'))
   assert.equal(await countUsers(db), 0)
   await db.close()
 })
@@ -165,6 +165,12 @@ test('Google sign-in, repeat sign-in, and sign-out', async () => {
     assert.ok(state)
     const stateCookie = cookiesFrom(start)
     assert.match(stateCookie, /oauth_state=/)
+    const sample = await fetch(`${base}/auth/sample`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'return=/',
+    })
+    assert.equal(sample.status, 404)
 
     const bad = await fetch(`${base}/auth/google/callback?code=nope&state=wrong`, {
       redirect: 'manual',
@@ -248,9 +254,40 @@ test('missing Google credentials do not start a redirect', async () => {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/auth/google`, { redirect: 'manual' })
+    const base = `http://127.0.0.1:${port}`
+    const home = await fetch(base)
+    const homeHtml = await home.text()
+    assert.match(homeHtml, /Try the sample account/)
+    assert.match(homeHtml, /shared sample data/)
+    assert.doesNotMatch(homeHtml, /Sign in with Google/)
+    const response = await fetch(`${base}/auth/google`, { redirect: 'manual' })
     assert.equal(response.status, 500)
     assert.match(await response.text(), /GOOGLE_CLIENT_ID/)
+    const started = await fetch(`${base}/auth/sample`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'return=/',
+    })
+    assert.equal(started.status, 303)
+    const cookie = cookiesFrom(started)
+    const signedIn = await fetch(base, { headers: { cookie } })
+    const signedHtml = await signedIn.text()
+    assert.match(signedHtml, /Hello, Sample friend/)
+    assert.match(signedHtml, /Sample data/)
+    const created = await fetch(`${base}/groups`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'name=Morning+walk',
+    })
+    assert.equal(created.status, 303)
+    const groupUrl = new URL(created.headers.get('location') ?? '/', base)
+    const group = await fetch(groupUrl, { headers: { cookie } })
+    const groupHtml = await group.text()
+    assert.match(groupHtml, /Morning walk/)
+    assert.match(groupHtml, /Sample friend/)
+    assert.equal(await countUsers(db), 1)
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
     await db.close()

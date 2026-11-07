@@ -1,11 +1,11 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { PGlite } from '@electric-sql/pglite'
+import type { Database } from './db.ts'
 import { upsertAccount } from './accounts.ts'
 import { clearCookie, readCookie, secretsMatch, writeCookie } from './cookies.ts'
 import { createGroup, joinGroup, listHomeGroups, viewGroup } from './groups.ts'
 import { authorizeUrl, exchangeCode, type GoogleConfig } from './google.ts'
-import type { AuthFailure, Viewer } from './identity.ts'
+import { sampleIdentity, type AuthFailure, type Viewer } from './identity.ts'
 import {
   groupHref,
   matchGroupPath,
@@ -16,6 +16,7 @@ import {
   renderNewGroup,
   safeReturnPath,
   type GroupRoute,
+  type SignInMode,
 } from './page.ts'
 import { accountForSession, createSession, deleteSession } from './sessions.ts'
 
@@ -27,15 +28,26 @@ const SESSION_MAX_AGE = 60 * 60 * 24 * 30
 const FORM_LIMIT_BYTES = 4096
 
 export type AppDeps = {
-  db: PGlite
+  db: Database
   config: GoogleConfig
   fetch?: typeof fetch
 }
 
+function requestProto(req: IncomingMessage): 'http' | 'https' {
+  const forwarded = req.headers['x-forwarded-proto']
+  const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded
+  const first = raw?.split(',')[0]?.trim()
+  if (first === 'https' || first === 'http') return first
+  return (req.socket as { encrypted?: boolean }).encrypted ? 'https' : 'http'
+}
+
 function requestOrigin(req: IncomingMessage): string {
   const host = req.headers.host ?? 'localhost'
-  const encrypted = Boolean((req.socket as { encrypted?: boolean }).encrypted)
-  return `${encrypted ? 'https' : 'http'}://${host}`
+  return `${requestProto(req)}://${host}`
+}
+
+function signInMode(config: GoogleConfig): SignInMode {
+  return config.clientId === '' || config.clientSecret === '' ? 'sample' : 'google'
 }
 
 function redirectUri(origin: string): string {
@@ -60,7 +72,7 @@ function sendRedirect(res: ServerResponse, location: string, cookies: string[] =
   res.end()
 }
 
-async function viewerFrom(req: IncomingMessage, db: PGlite): Promise<Viewer> {
+async function viewerFrom(req: IncomingMessage, db: Database): Promise<Viewer> {
   const token = readCookie(req.headers.cookie, SESSION_COOKIE)
   const account = await accountForSession(db, token)
   if (!account) return { state: 'signed_out' }
@@ -69,8 +81,10 @@ async function viewerFrom(req: IncomingMessage, db: PGlite): Promise<Viewer> {
 
 export function createApp(deps: AppDeps) {
   const fetchImpl = deps.fetch ?? fetch
+  const mode = signInMode(deps.config)
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const origin = requestOrigin(req)
+    const secure = requestProto(req) === 'https'
     const url = new URL(req.url ?? '/', `${origin}/`)
     const path = url.pathname
     const method = req.method ?? 'GET'
@@ -80,19 +94,22 @@ export function createApp(deps: AppDeps) {
         const viewer = await viewerFrom(req, deps.db)
         const home =
           viewer.state === 'signed_out'
-            ? renderHome(viewer)
-            : renderHome({
-                state: 'signed_in',
-                account: viewer.account,
-                groups: await listHomeGroups(deps.db, viewer.account),
-              })
+            ? renderHome(viewer, mode)
+            : renderHome(
+                {
+                  state: 'signed_in',
+                  account: viewer.account,
+                  groups: await listHomeGroups(deps.db, viewer.account),
+                },
+                mode,
+              )
         sendHtml(res, 200, home)
         return
       }
 
       const groupRoute = matchGroupPath(path)
       if (groupRoute) {
-        await handleGroup(req, res, method, origin, groupRoute, deps)
+        await handleGroup(req, res, method, origin, groupRoute, deps, mode)
         return
       }
 
@@ -109,8 +126,8 @@ export function createApp(deps: AppDeps) {
         })
         const returnTo = safeReturnPath(url.searchParams.get('return'))
         sendRedirect(res, location, [
-          writeCookie(STATE_COOKIE, state, STATE_MAX_AGE),
-          writeCookie(RETURN_COOKIE, returnTo, STATE_MAX_AGE),
+          writeCookie(STATE_COOKIE, state, STATE_MAX_AGE, secure),
+          writeCookie(RETURN_COOKIE, returnTo, STATE_MAX_AGE, secure),
         ])
         return
       }
@@ -120,22 +137,46 @@ export function createApp(deps: AppDeps) {
         const returnTo = safeReturnPath(readCookie(req.headers.cookie, RETURN_COOKIE))
         if (signIn.kind === 'error') {
           sendHtml(res, signIn.status, renderFailure(signIn.failure), [
-            clearCookie(STATE_COOKIE),
-            clearCookie(RETURN_COOKIE),
+            clearCookie(STATE_COOKIE, secure),
+            clearCookie(RETURN_COOKIE, secure),
           ])
           return
         }
         sendRedirect(res, returnTo, [
-          clearCookie(STATE_COOKIE),
-          clearCookie(RETURN_COOKIE),
-          writeCookie(SESSION_COOKIE, signIn.token, SESSION_MAX_AGE),
+          clearCookie(STATE_COOKIE, secure),
+          clearCookie(RETURN_COOKIE, secure),
+          writeCookie(SESSION_COOKIE, signIn.token, SESSION_MAX_AGE, secure),
         ])
         return
       }
 
       if (method === 'POST' && path === '/logout') {
         await deleteSession(deps.db, readCookie(req.headers.cookie, SESSION_COOKIE))
-        sendRedirect(res, '/', [clearCookie(SESSION_COOKIE)])
+        sendRedirect(res, '/', [clearCookie(SESSION_COOKIE, secure)])
+        return
+      }
+
+      if (path === '/auth/sample') {
+        if (mode !== 'sample') {
+          if (method === 'POST') req.resume()
+          sendHtml(res, 404, renderMessage('Not found', 'That page does not exist.'))
+          return
+        }
+        if (method !== 'POST') return rejectMethod(res, 'POST')
+        const form = await readForm(req)
+        if (form === 'too_large' || form === 'bad_type') {
+          sendHtml(res, form === 'too_large' ? 413 : 400, renderMessage('Something went wrong', 'Try that again.'))
+          return
+        }
+        const saved = await upsertAccount(deps.db, sampleIdentity)
+        if (!saved.ok) {
+          sendHtml(res, 500, renderMessage('Something went wrong', 'Try that again.'))
+          return
+        }
+        const token = await createSession(deps.db, saved.account.id)
+        sendRedirect(res, safeReturnPath(form.get('return')), [
+          writeCookie(SESSION_COOKIE, token, SESSION_MAX_AGE, secure),
+        ], 303)
         return
       }
 
@@ -165,18 +206,19 @@ async function handleGroup(
   origin: string,
   route: GroupRoute,
   deps: AppDeps,
+  mode: SignInMode,
 ): Promise<void> {
   const viewer = await viewerFrom(req, deps.db)
   if (route.kind === 'new') {
     if (method !== 'GET') return rejectMethod(res, 'GET')
-    sendHtml(res, 200, renderNewGroup(viewer))
+    sendHtml(res, 200, renderNewGroup(viewer, undefined, mode))
     return
   }
   if (route.kind === 'create') {
     if (method !== 'POST') return rejectMethod(res, 'POST')
     if (viewer.state === 'signed_out') {
       req.resume()
-      sendHtml(res, 401, renderNewGroup(viewer))
+      sendHtml(res, 401, renderNewGroup(viewer, undefined, mode))
       return
     }
     const form = await readForm(req)
@@ -190,7 +232,7 @@ async function handleGroup(
     }
     const created = await createGroup(deps.db, viewer.account, form.get('name') ?? '')
     if (!created.ok) {
-      sendHtml(res, 400, renderNewGroup(viewer, created.failure))
+      sendHtml(res, 400, renderNewGroup(viewer, created.failure, mode))
       return
     }
     sendRedirect(res, groupHref(created.groupId), [], 303)
@@ -204,7 +246,7 @@ async function handleGroup(
       sendHtml(res, 404, renderMessage('Not found', 'That page does not exist.'))
       return
     }
-    sendHtml(res, 200, renderGroup(view, viewer, origin))
+    sendHtml(res, 200, renderGroup(view, viewer, origin, mode))
     return
   }
   if (method !== 'POST') return rejectMethod(res, 'POST')
@@ -215,7 +257,7 @@ async function handleGroup(
       return
     }
     if (view.kind === 'full') {
-      sendHtml(res, 409, renderGroup(view, viewer, origin))
+      sendHtml(res, 409, renderGroup(view, viewer, origin, mode))
       return
     }
     const preview = {
@@ -224,7 +266,7 @@ async function handleGroup(
       name: view.name,
       activeCount: view.activeCount,
     }
-    sendHtml(res, 401, renderGroup(preview, viewer, origin))
+    sendHtml(res, 401, renderGroup(preview, viewer, origin, mode))
     return
   }
   const joined = await joinGroup(deps.db, viewer.account, route.groupId)
@@ -241,7 +283,7 @@ async function handleGroup(
     sendHtml(res, 404, renderMessage('Not found', 'That page does not exist.'))
     return
   }
-  sendHtml(res, 409, renderGroup(view, viewer, origin))
+  sendHtml(res, 409, renderGroup(view, viewer, origin, mode))
 }
 
 async function readForm(req: IncomingMessage): Promise<URLSearchParams | 'too_large' | 'bad_type'> {

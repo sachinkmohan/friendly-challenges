@@ -208,7 +208,7 @@ test('a sixth active member is rejected by the database', async () => {
       [groupId],
     )
     assert.equal(active.rows[0]?.n, 5)
-    const dir = new URL('../db/', import.meta.url)
+    const dir = new URL('../migrations/', import.meta.url)
     for (const file of readdirSync(dir).filter((name) => name.endsWith('.sql')).sort()) {
       await db.exec(readFileSync(new URL(file, dir), 'utf8'))
     }

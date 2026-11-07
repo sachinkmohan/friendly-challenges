@@ -1,3 +1,13 @@
+export const SAMPLE_GOOGLE_SUB = 'sample'
+
+export const sampleIdentity: GoogleIdentity = {
+  sub: SAMPLE_GOOGLE_SUB,
+  email: 'sample@example.com',
+  emailVerified: true,
+  displayName: 'Sample friend',
+  avatarUrl: null,
+}
+
 export type GoogleIdentity = {
   sub: string
   email: string

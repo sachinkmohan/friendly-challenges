@@ -1,5 +1,5 @@
 import { parseGroupId, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
-import { authFailureCopy, type Account, type AuthFailure, type Viewer } from './identity.ts'
+import { SAMPLE_GOOGLE_SUB, authFailureCopy, type Account, type AuthFailure, type Viewer } from './identity.ts'
 
 function escapeHtml(value: string): string {
   return value
@@ -292,9 +292,19 @@ function portrait(person: { displayName: string; avatarUrl: string | null }): st
 const groupsRoot = '/groups'
 const joinSuffix = '/join'
 
+export type SignInMode = 'google' | 'sample'
+
 export type HomePage =
   | { state: 'signed_out' }
   | { state: 'signed_in'; account: Account; groups: readonly HomeGroup[] }
+
+function sampleForm(returnPath: string): string {
+  return `<form method="post" action="/auth/sample"><input type="hidden" name="return" value="${escapeHtml(returnPath)}"><button type="submit">Try the sample account</button></form>`
+}
+
+function sampleNote(): string {
+  return '<p>Google sign-in is not set up on this server. The sample account is shared sample data.</p>'
+}
 
 export type GroupRoute =
   | { kind: 'new' }
@@ -350,32 +360,47 @@ function homeGroups(groups: readonly HomeGroup[]): string {
   return `<ul class="groups">${items}</ul>`
 }
 
-function signedOutScreens(): string {
+function signedOutScreens(mode: SignInMode): string {
+  const homeAction =
+    mode === 'sample'
+      ? `${sampleNote()}${sampleForm('/')}`
+      : `<p>Sign in with the Google account you will use for your group.</p>
+        <a class="button" href="/auth/google">Sign in with Google</a>`
+  const accountAction =
+    mode === 'sample'
+      ? `${sampleNote()}${sampleForm('/')}`
+      : `<p>No account on this device yet. Google sign-in stores one account for this app.</p>
+        <a class="button" href="/auth/google">Sign in with Google</a>`
   return `
     <section id="home" class="screen">
       <article class="card">
         <h2>Sign in</h2>
-        <p>Sign in with the Google account you will use for your group.</p>
-        <a class="button" href="/auth/google">Sign in with Google</a>
+        ${homeAction}
       </article>
     </section>
     <section id="account" class="screen">
       <article class="card">
         <h2>Account</h2>
-        <p>No account on this device yet. Google sign-in stores one account for this app.</p>
-        <a class="button" href="/auth/google">Sign in with Google</a>
+        ${accountAction}
       </article>
     </section>
   `
 }
 
+function sampleBanner(account: Account): string {
+  if (account.googleSub !== SAMPLE_GOOGLE_SUB) return ''
+  return '<p>Sample data. This account is shared.</p>'
+}
+
 function signedInScreens(account: Account, groups: readonly HomeGroup[]): string {
   const name = escapeHtml(account.displayName)
   const email = escapeHtml(account.email)
+  const sample = sampleBanner(account)
   return `
     <section id="home" class="screen">
       <article class="card">
         <h2>Hello, ${name}</h2>
+        ${sample}
         ${homeGroups(groups)}
         <a class="button" href="${groupsRoot}/new">Create a group</a>
       </article>
@@ -389,6 +414,7 @@ function signedInScreens(account: Account, groups: readonly HomeGroup[]): string
             <div class="email">${email}</div>
           </div>
         </div>
+        ${sample}
         <form method="post" action="/logout">
           <button type="submit">Sign out</button>
         </form>
@@ -397,8 +423,8 @@ function signedInScreens(account: Account, groups: readonly HomeGroup[]): string
   `
 }
 
-export function renderHome(page: HomePage): string {
-  const screens = page.state === 'signed_out' ? signedOutScreens() : signedInScreens(page.account, page.groups)
+export function renderHome(page: HomePage, mode: SignInMode = 'google'): string {
+  const screens = page.state === 'signed_out' ? signedOutScreens(mode) : signedInScreens(page.account, page.groups)
   return frame(screens, tabBar('#home', '#account'))
 }
 
@@ -413,13 +439,20 @@ function groupCard(body: string): string {
   return frame(screens, tabBar('/', '/#account'))
 }
 
-export function renderNewGroup(viewer: Viewer, error?: 'name_empty' | 'name_too_long'): string {
+export function renderNewGroup(
+  viewer: Viewer,
+  error?: 'name_empty' | 'name_too_long',
+  mode: SignInMode = 'google',
+): string {
   if (viewer.state === 'signed_out') {
-    const href = escapeHtml(googleReturnHref(`${groupsRoot}/new`))
+    const action =
+      mode === 'sample'
+        ? `${sampleNote()}${sampleForm(`${groupsRoot}/new`)}`
+        : `<a class="button" href="${escapeHtml(googleReturnHref(`${groupsRoot}/new`))}">Sign in with Google</a>`
     return groupCard(`
       <h2>Create a group</h2>
       <p>Sign in to create a group.</p>
-      <a class="button" href="${href}">Sign in with Google</a>
+      ${action}
     `)
   }
   const message =
@@ -444,8 +477,9 @@ function memberItem(member: MemberLine): string {
   return `<li>${portrait(member)} ${escapeHtml(member.displayName)} <time datetime="${when}">${when}</time></li>`
 }
 
-function joinControl(groupId: GroupId, viewer: Viewer): string {
+function joinControl(groupId: GroupId, viewer: Viewer, mode: SignInMode): string {
   if (viewer.state === 'signed_out') {
+    if (mode === 'sample') return `${sampleNote()}${sampleForm(groupHref(groupId))}`
     const href = escapeHtml(googleReturnHref(groupHref(groupId)))
     return `<a class="button" href="${href}">Sign in with Google</a>`
   }
@@ -457,6 +491,7 @@ export function renderGroup(
   view: Exclude<GroupView, { kind: 'missing' }>,
   viewer: Viewer,
   origin: string,
+  mode: SignInMode = 'google',
 ): string {
   const title = `<h2>${escapeHtml(view.name)}</h2>`
   const count = `<p class="count">${activeCountText(view.activeCount)}</p>`
@@ -464,7 +499,7 @@ export function renderGroup(
     return groupCard(`${title}${count}<p>This group is full.</p>`)
   }
   if (view.kind === 'preview') {
-    return groupCard(`${title}${count}${joinControl(view.groupId, viewer)}`)
+    return groupCard(`${title}${count}${joinControl(view.groupId, viewer, mode)}`)
   }
   const share = escapeHtml(`${origin}${groupHref(view.groupId)}`)
   return groupCard(`
