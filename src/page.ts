@@ -163,15 +163,29 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
       gap: 12px;
       min-height: 48px;
     }
+    ul.groups { margin-top: 8px; }
+    ul.groups li + li { margin-top: 8px; }
     ul.groups a {
       display: flex;
       align-items: center;
+      gap: 12px;
       flex: 1;
-      min-height: 48px;
+      min-height: 56px;
+      padding: 0 12px 0 16px;
+      border: 1px solid #e7e0d4;
+      border-radius: 14px;
+      background: #f6f1e8;
       color: #1c1915;
-      font-weight: 650;
       text-decoration: none;
+      touch-action: manipulation;
     }
+    ul.groups a:active { background: #efe8dc; }
+    .group-name { flex: 1; min-width: 0; font-weight: 650; overflow-wrap: anywhere; }
+    .chevron { color: #8a8378; font-size: 22px; line-height: 1; }
+    .section-title { margin-top: 16px; font-weight: 650; color: #1c1915; }
+    .new-group { margin-top: 24px; padding-top: 16px; border-top: 1px solid #e7e0d4; }
+    .new-group .section-title { margin-top: 0; }
+    .new-group a.button { background: #fffdf8; color: #1c1915; box-shadow: inset 0 0 0 1.5px #1c1915; }
     .count { color: #5c564c; }
     .members time, .rhythm { color: #5c564c; }
     .net.owed { color: #2f7d4a; font-weight: 650; }
@@ -492,10 +506,10 @@ function homeGroups(groups: readonly HomeGroup[]): string {
     .map((group) => {
       const href = escapeHtml(groupHref(group.groupId))
       const name = escapeHtml(group.name)
-      return `<li><a href="${href}">${name}</a> <span class="count">${activeCountText(group.activeCount)}</span></li>`
+      return `<li><a href="${href}"><span class="group-name">${name}</span><span class="count">${activeCountText(group.activeCount)}</span><span class="chevron" aria-hidden="true">›</span></a></li>`
     })
     .join('')
-  return `<ul class="groups">${items}</ul>`
+  return `<p class="section-title">Your groups</p><ul class="groups">${items}</ul>`
 }
 
 const WEEKDAY_LABELS = ['', 'Mon', '', 'Wed', '', 'Fri', ''] as const
@@ -565,7 +579,11 @@ function signedInScreens(account: Account, groups: readonly HomeGroup[], heatmap
         <h2>Hello, ${name}</h2>
         ${homeGroups(groups)}
         ${heatmaps.map(heatmapGrid).join('')}
-        <a class="button" href="${groupsRoot}/new">Create a group</a>
+        <div class="new-group">
+          <p class="section-title">Start something new</p>
+          <p class="field-hint">Make a new group and invite up to 4 friends.</p>
+          <a class="button" href="${groupsRoot}/new">+ Create a group</a>
+        </div>
       </article>
     </section>
     <section id="account" class="screen">
