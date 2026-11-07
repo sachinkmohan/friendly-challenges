@@ -9,7 +9,7 @@ import {
   type Rhythm,
   type RhythmLine,
 } from './challenge.ts'
-import type { CheckIn, CheckInColor } from './checkins.ts'
+import { isColor, type CheckIn, type CheckInColor } from './checkins.ts'
 import { parseGroupId, type GroupId, type MemberLine } from './groups.ts'
 import type { Account } from './identity.ts'
 
@@ -86,14 +86,19 @@ export function utcToday(now: Date = new Date()): IsoDate {
   return isoFrom(now)
 }
 
-export function calendarDays({ window, today }: CalendarSpan): readonly IsoDate[] {
+function calendarDays({ window, today }: CalendarSpan): readonly IsoDate[] {
   const last = today < window.endsOn ? today : window.endsOn
   const days: IsoDate[] = []
   for (let day = window.startsOn; day <= last; day = addDays(day, 1)) days.push(day)
   return days
 }
 
-export function markDay(due: boolean, color: CheckInColor | undefined, day: IsoDate, today: IsoDate): DayMark {
+function markDay({ due, color, day, today }: {
+  readonly due: boolean
+  readonly color: CheckInColor | undefined
+  readonly day: IsoDate
+  readonly today: IsoDate
+}): DayMark {
   if (!due) return 'blank'
   if (color) return color
   return day < today ? 'red' : 'empty'
@@ -105,7 +110,12 @@ function markMember(span: CalendarSpan, days: readonly IsoDate[], member: Calend
     displayName: member.displayName,
     days: days.map((day) => ({
       day,
-      mark: markDay(memberIsDue(span.window, member.span, member.rhythm, day), member.colors.get(day), day, span.today),
+      mark: markDay({
+        due: memberIsDue(span.window, member.span, member.rhythm, day),
+        color: member.colors.get(day),
+        day,
+        today: span.today,
+      }),
     })),
   }
 }
@@ -205,7 +215,7 @@ export async function listHeatmaps(db: PGlite, account: Account, today: IsoDate)
     const colors = new Map<IsoDate, CheckInColor>()
     for (const item of checkIns.rows) {
       if (item.group_id !== row.group_id) continue
-      if (item.color !== 'green' && item.color !== 'red') throw new Error('check-in color')
+      if (!isColor(item.color)) throw new Error('check-in color')
       colors.set(dateFrom(item.day), item.color)
     }
     const window: ChallengeWindow = { phase: 'active', startsOn: dateFrom(row.starts_on), endsOn: dateFrom(row.ends_on) }

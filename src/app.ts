@@ -82,6 +82,10 @@ async function viewerFrom(req: IncomingMessage, db: PGlite): Promise<Viewer> {
   return { state: 'signed_in', account }
 }
 
+function today(deps: AppDeps): IsoDate {
+  return (deps.today ?? utcToday)()
+}
+
 export function createApp(deps: AppDeps) {
   const fetchImpl = deps.fetch ?? fetch
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -100,7 +104,7 @@ export function createApp(deps: AppDeps) {
                 state: 'signed_in',
                 account: viewer.account,
                 groups: await listHomeGroups(deps.db, viewer.account),
-                heatmaps: await listHeatmaps(deps.db, viewer.account, (deps.today ?? utcToday)()),
+                heatmaps: await listHeatmaps(deps.db, viewer.account, today(deps)),
               })
         sendHtml(res, 200, home)
         return
@@ -332,7 +336,7 @@ async function sendMemberPage(
     card.phase === 'active'
       ? groupCalendar({
           window: { phase: 'active', startsOn: card.terms.startsOn, endsOn: card.terms.endsOn },
-          today: (deps.today ?? utcToday)(),
+          today: today(deps),
           members: view.members,
           rhythms: card.rhythms,
           checkIns,

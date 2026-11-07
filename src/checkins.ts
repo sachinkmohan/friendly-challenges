@@ -62,7 +62,7 @@ class CheckInRejected extends Error {
   }
 }
 
-function isColor(value: string): value is CheckInColor {
+export function isColor(value: string): value is CheckInColor {
   return Object.prototype.hasOwnProperty.call(CHECK_IN_LABELS, value)
 }
 
