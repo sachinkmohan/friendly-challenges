@@ -582,7 +582,7 @@ function signedInScreens(account: Account, groups: readonly HomeGroup[], heatmap
         <div class="new-group">
           <p class="section-title">Start something new</p>
           <p class="field-hint">Make a new group and invite up to 4 friends.</p>
-          <a class="button" href="${groupsRoot}/new">+ Create a group</a>
+          <a class="button" href="${groupsRoot}/new">Create a group</a>
         </div>
       </article>
     </section>
