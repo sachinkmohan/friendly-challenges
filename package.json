@@ -12,7 +12,8 @@
     "test": "firebase emulators:exec --only firestore --project demo-friendly-challenges \"node --experimental-strip-types --test test/*.ts\""
   },
   "dependencies": {
-    "firebase-admin": "^14.5.0"
+    "firebase-admin": "^14.5.0",
+    "serverless-http": "^3.2.0"
   },
   "devDependencies": {
     "firebase-tools": "^15.35.0"

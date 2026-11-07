@@ -26,6 +26,10 @@ The emulator starts empty each time, then loads the sample group.
 
 On the host, `npm start` talks to a real Firestore database. Create a Firebase project with Firestore, create a service account key, and put the whole key JSON in `FIREBASE_SERVICE_ACCOUNT`. `npm run build` loads the sample group into that database. Deploy `firestore.rules` with `firebase deploy --only firestore:rules` so no browser client can read or write. Only the server talks to Firestore.
 
+## Netlify
+
+`netlify.toml` sends every path to the function in `netlify/functions/app.ts`, which runs the same app. Set `FIREBASE_SERVICE_ACCOUNT`, `GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET` in the site's environment variables, scoped to Functions and Builds. In the Google client, register `https://<site>.netlify.app/auth/google/callback`.
+
 ## Groups
 
 Sign in. Choose **Create a group** and type a name. You are the first member. The group page shows the members, the active count, each join date, and an invite link.
