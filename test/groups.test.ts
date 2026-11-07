@@ -244,10 +244,10 @@ test('a blank or oversized name does not create a group', async () => {
     assert.equal(tooManyEmoji.status, 400)
     assert.match(await tooManyEmoji.text(), /40 characters or fewer/)
     await assert.rejects(
-      db.query(`INSERT INTO groups (id, name) VALUES ($1::uuid, $2)`, [crypto.randomUUID(), 'c'.repeat(41)]),
+      db.query(`INSERT INTO groups (id, name, created_by) VALUES ($1::uuid, $2, $3)`, [crypto.randomUUID(), 'c'.repeat(41), ada.userId]),
     )
     await assert.rejects(
-      db.query(`INSERT INTO groups (id, name) VALUES ($1::uuid, $2)`, [crypto.randomUUID(), '   ']),
+      db.query(`INSERT INTO groups (id, name, created_by) VALUES ($1::uuid, $2, $3)`, [crypto.randomUUID(), '   ', ada.userId]),
     )
     assert.equal(await countRows(db, 'groups'), 2)
   } finally {

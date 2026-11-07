@@ -14,9 +14,10 @@ import {
   type ChallengeInput,
   type RhythmInput,
 } from './challenge.ts'
-import { groupCalendar, listHeatmaps, utcToday } from './calendar.ts'
+import { listHeatmaps, utcToday } from './calendar.ts'
 import type { IsoDate } from './challenge.ts'
 import { listCheckIns, logCheckIn, type CheckInInput } from './checkins.ts'
+import { recordDropout, type DropoutFailure, type DropoutInput } from './dropouts.ts'
 import { createGroup, joinGroup, listHomeGroups, viewGroup, type GroupId } from './groups.ts'
 import { authorizeUrl, exchangeCode, type GoogleConfig } from './google.ts'
 import type { Account, AuthFailure, Viewer } from './identity.ts'
@@ -231,6 +232,10 @@ async function handleGroup(
     await postPayment(req, res, method, origin, route.groupId, viewer, deps)
     return
   }
+  if (route.kind === 'record_dropout') {
+    await postDropout(req, res, method, origin, route.groupId, viewer, deps)
+    return
+  }
   if (method !== 'POST') return rejectMethod(res, 'POST')
   if (viewer.state === 'signed_out') {
     const view = await viewGroup(deps.db, null, route.groupId)
@@ -337,18 +342,8 @@ async function sendMemberPage(
   }
   const card = loaded.card
   const checkIns = card.phase === 'active' ? await listCheckIns(deps.db, groupId) : []
-  const calendar =
-    card.phase === 'active'
-      ? groupCalendar({
-          window: { phase: 'active', startsOn: card.terms.startsOn, endsOn: card.terms.endsOn },
-          today: today(deps),
-          members: view.members,
-          rhythms: card.rhythms,
-          checkIns,
-        })
-      : null
   const ledger = card.phase === 'active' ? await readLedger(deps.db, groupId, today(deps)) : null
-  sendHtml(res, status, renderGroup({ ...view, challenge: card, checkIns, calendar, ledger }, viewer, origin, attempt))
+  sendHtml(res, status, renderGroup({ ...view, challenge: card, checkIns, ledger }, viewer, origin, attempt))
 }
 
 async function finishChallenge(
@@ -505,6 +500,46 @@ async function postPayment(
     return
   }
   await sendMemberPage(res, paymentStatus(recorded.failure), viewer.account, groupId, origin, deps, attempt)
+}
+
+function dropoutStatus(failure: DropoutFailure): number {
+  if (failure === 'not_member' || failure === 'not_allowed') return 403
+  return 400
+}
+
+async function postDropout(
+  req: IncomingMessage,
+  res: ServerResponse,
+  method: string,
+  origin: string,
+  groupId: GroupId,
+  viewer: Viewer,
+  deps: AppDeps,
+): Promise<void> {
+  if (method !== 'POST') return rejectMethod(res, 'POST')
+  if (viewer.state === 'signed_out') {
+    req.resume()
+    await sendGroupPage(res, 401, null, groupId, origin, deps)
+    return
+  }
+  const form = await readForm(req)
+  if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
+  const input: DropoutInput = { memberId: form.get('member') ?? '', lastDay: form.get('last_day') ?? '' }
+  const recorded = await recordDropout(deps.db, viewer.account, groupId, input, today(deps))
+  if (recorded.ok) {
+    sendRedirect(res, input.memberId === viewer.account.id ? '/' : groupHref(groupId), [], 303)
+    return
+  }
+  if (recorded.failure === 'group_missing') {
+    notFound(res)
+    return
+  }
+  const attempt: ChallengeAttempt = { dropoutFailure: recorded.failure, dropoutDraft: input }
+  if (recorded.failure === 'not_member') {
+    await sendGroupPage(res, 403, viewer.account, groupId, origin, deps, attempt)
+    return
+  }
+  await sendMemberPage(res, dropoutStatus(recorded.failure), viewer.account, groupId, origin, deps, attempt)
 }
 
 function rejectForm(res: ServerResponse, failure: 'too_large' | 'bad_type'): void {

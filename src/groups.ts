@@ -34,6 +34,7 @@ export type GroupView =
       groupId: GroupId
       name: string
       activeCount: number
+      creatorId: string
       members: readonly MemberLine[]
     }
   | { kind: 'preview'; groupId: GroupId; name: string; activeCount: number }
@@ -53,6 +54,7 @@ type DbError = {
 
 type GroupPageRow = {
   name: string
+  created_by: string
   active_count: number | string
   full: boolean
   viewer_is_member: boolean | null
@@ -144,7 +146,7 @@ export async function createGroup(
   try {
     const result = await db.query<{ group_id: string }>(
       `WITH created AS (
-         INSERT INTO groups (id, name) VALUES ($1::uuid, $2) RETURNING id
+         INSERT INTO groups (id, name, created_by) VALUES ($1::uuid, $2, $3::uuid) RETURNING id
        )
        INSERT INTO memberships (group_id, user_id, joined_on)
        SELECT id, $3::uuid, (now() AT TIME ZONE 'utc')::date
@@ -192,6 +194,7 @@ export async function viewGroup(
 ): Promise<GroupView> {
   const result = await db.query<GroupPageRow>(
     `SELECT g.name,
+            g.created_by::text AS created_by,
             count(a.user_id)::int AS active_count,
             count(a.user_id)::int >= active_member_cap() AS full,
             bool_or(a.user_id = $2::uuid) AS viewer_is_member,
@@ -210,7 +213,7 @@ export async function viewGroup(
      LEFT JOIN active_memberships a ON a.group_id = g.id
      LEFT JOIN users u ON u.id = a.user_id
      WHERE g.id = $1::uuid
-     GROUP BY g.id, g.name`,
+     GROUP BY g.id, g.name, g.created_by`,
     [groupId, account?.id ?? null],
   )
   const row = result.rows[0]
@@ -219,11 +222,13 @@ export async function viewGroup(
   const activeCount = countFrom(row.active_count)
   const viewerIsMember = row.viewer_is_member === null ? false : flagFrom(row.viewer_is_member)
   if (account && viewerIsMember) {
+    if (typeof row.created_by !== 'string') throw new Error('group creator')
     return {
       kind: 'members',
       groupId,
       name: row.name,
       activeCount,
+      creatorId: row.created_by,
       members: parseMembers(row.members),
     }
   }

@@ -17,6 +17,7 @@ import {
   type RhythmLine,
 } from './challenge.ts'
 import { DAY_MARK_LABELS, type GroupCalendar, type Heatmap, type MarkedDay } from './calendar.ts'
+import { dropoutFailureCopy, type DropoutFailure, type DropoutInput } from './dropouts.ts'
 import { CHECK_IN_LABELS, checkInFailureCopy, type CheckIn, type CheckInFailure } from './checkins.ts'
 import { parseGroupId, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
 import { authFailureCopy, type Account, type AuthFailure, type Viewer } from './identity.ts'
@@ -357,6 +358,7 @@ const challengeSuffix = '/challenge'
 const rhythmSuffix = '/rhythm'
 const checkInSuffix = '/check-in'
 const paymentSuffix = '/payment'
+const dropoutSuffix = '/dropout'
 
 export type HomePage =
   | { state: 'signed_out' }
@@ -372,6 +374,7 @@ export type GroupRoute =
   | { kind: 'save_rhythm'; groupId: GroupId }
   | { kind: 'log_check_in'; groupId: GroupId }
   | { kind: 'record_payment'; groupId: GroupId }
+  | { kind: 'record_dropout'; groupId: GroupId }
 
 export function groupHref(groupId: GroupId): string {
   return `${groupsRoot}/${groupId}`
@@ -388,7 +391,14 @@ function googleReturnHref(returnPath: string): string {
 function routeSuffix(
   rest: string,
   suffix: string,
-  kind: 'start_challenge' | 'save_challenge' | 'save_rhythm' | 'log_check_in' | 'record_payment' | 'join',
+  kind:
+    | 'start_challenge'
+    | 'save_challenge'
+    | 'save_rhythm'
+    | 'log_check_in'
+    | 'record_payment'
+    | 'record_dropout'
+    | 'join',
 ): GroupRoute | null {
   if (!rest.endsWith(suffix) || rest.length <= suffix.length) return null
   const idPart = rest.slice(0, -suffix.length)
@@ -409,6 +419,7 @@ export function matchGroupPath(path: string): GroupRoute | null {
     routeSuffix(rest, rhythmSuffix, 'save_rhythm') ??
     routeSuffix(rest, checkInSuffix, 'log_check_in') ??
     routeSuffix(rest, paymentSuffix, 'record_payment') ??
+    routeSuffix(rest, dropoutSuffix, 'record_dropout') ??
     routeSuffix(rest, joinSuffix, 'join')
   if (suffixed) return suffixed
   if (rest.includes('/')) return null
@@ -580,6 +591,8 @@ export type ChallengeAttempt = {
   checkInFailure?: CheckInFailure
   paymentFailure?: PaymentFailure
   paymentDraft?: PaymentInput
+  dropoutFailure?: DropoutFailure
+  dropoutDraft?: DropoutInput
   draft?: ChallengeInput
   rhythmDraft?: RhythmInput
   checkInDay?: string
@@ -607,6 +620,7 @@ function failureParagraph(attempt?: ChallengeAttempt): string {
   if (attempt?.failure) return `<p>${escapeHtml(challengeFailureCopy[attempt.failure])}</p>`
   if (attempt?.checkInFailure) return `<p>${escapeHtml(checkInFailureCopy[attempt.checkInFailure])}</p>`
   if (attempt?.paymentFailure) return `<p>${escapeHtml(paymentFailureCopy[attempt.paymentFailure])}</p>`
+  if (attempt?.dropoutFailure) return `<p>${escapeHtml(dropoutFailureCopy[attempt.dropoutFailure])}</p>`
   return ''
 }
 
@@ -825,6 +839,29 @@ function balancesSection(groupId: GroupId, ledger: Ledger, userId: string, draft
   return `<p class="check-ins-title">Balances</p>${nets}<p class="check-ins-title">Who owes whom</p>${open}${paymentForm(groupId, ledger, userId, draft)}${payments}`
 }
 
+function dropoutForm(
+  view: Extract<GroupView, { kind: 'members' }>,
+  userId: string,
+  draft: DropoutInput | undefined,
+): string {
+  const choices = userId === view.creatorId ? view.members : view.members.filter((member) => member.userId === userId)
+  if (choices.length === 0) return ''
+  const action = escapeHtml(`${groupHref(view.groupId)}${dropoutSuffix}`)
+  const members = optionList(
+    choices.map((member) => ({ value: member.userId, label: member.displayName })),
+    draft?.memberId ?? '',
+  )
+  return `<form method="post" action="${action}">
+      <p class="grid-title">Leave or record a dropout</p>
+      <p>Debts through the last day stay. Days after it owe nothing.</p>
+      <label for="dropout-member">Member</label>
+      <select id="dropout-member" name="member">${members}</select>
+      <label for="dropout-day">Last day</label>
+      <input id="dropout-day" name="last_day" type="date" value="${escapeHtml(draft?.lastDay ?? '')}" required>
+      <button type="submit">Record dropout</button>
+    </form>`
+}
+
 function startForm(groupId: GroupId, activeCount: number, floor: number, cap: number): string {
   if (activeCount < floor || activeCount > cap) return ''
   const action = escapeHtml(`${groupHref(groupId)}/challenge/start`)
@@ -861,7 +898,6 @@ export function renderGroup(
     | (Extract<GroupView, { kind: 'members' }> & {
         readonly challenge: MemberChallengeCard
         readonly checkIns: readonly CheckIn[]
-        readonly calendar: GroupCalendar | null
         readonly ledger: Ledger | null
       }),
   viewer: Viewer,
@@ -909,9 +945,10 @@ export function renderGroup(
     ${rhythm}
     ${checkIn}
     <ul class="members">${view.members.map((member) => memberItem(member, rhythms)).join('')}</ul>
-    ${view.calendar ? calendarGrid(view.calendar) : ''}
+    ${view.ledger ? calendarGrid(view.ledger.calendar) : ''}
     ${view.ledger ? balancesSection(view.groupId, view.ledger, userId, attempt?.paymentDraft) : ''}
     ${checkInList(view.checkIns)}
+    ${dropoutForm(view, userId, attempt?.dropoutDraft)}
     <p class="share">Share this link to invite someone. <a href="${share}">${share}</a></p>
   `)
 }
