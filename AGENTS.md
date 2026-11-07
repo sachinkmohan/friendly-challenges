@@ -8,7 +8,3 @@
 ## Subagents
 
 You may spawn subagents without asking first. This covers the design, coding, review, and verification agents that /poteto-mode and its skills call for.
-
-## Skills
-
-You may invoke any user-invocable skill without asking first, whenever the task calls for it.
