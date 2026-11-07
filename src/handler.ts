@@ -32,7 +32,9 @@ async function openApp() {
   const db =
     databaseUrl !== ''
       ? (await import('./hosted-db.ts')).openPostgres(databaseUrl)
-      : await openLocal()
+      : process.env.USE_EMBEDDED_DB === '1'
+        ? await openLocal()
+        : await missingDatabase()
   const port = process.env.PORT ?? '3000'
   const origin = process.env.APP_ORIGIN ?? `http://127.0.0.1:${port}`
   console.log(`Friendly challenges at ${origin}`)
@@ -44,6 +46,10 @@ async function openApp() {
       clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
     },
   })
+}
+
+async function missingDatabase(): Promise<never> {
+  throw new Error('The database is not configured.')
 }
 
 async function openLocal() {

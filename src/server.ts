@@ -11,4 +11,7 @@ export default function handler(req: IncomingMessage, res: ServerResponse): Prom
   return serve(req, res)
 }
 
-if (process.env.VERCEL !== '1') server.listen(port)
+if (process.env.VERCEL !== '1') {
+  process.env.USE_EMBEDDED_DB = '1'
+  server.listen(port)
+}
