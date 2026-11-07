@@ -30,6 +30,12 @@ On the group page, name the challenge, pick the type, the currency, and the stak
 
 After the start, each member with a rhythm sees a day picker and two buttons on the group card. **Kept it** saves the day green. **Missed it** saves it red. Saving the same day again replaces the color. The app accepts only a day the member is due by their rhythm, inside the challenge dates, and inside their membership. The card lists every saved check-in with the member, the day, and the color.
 
+## Calendar and heatmap
+
+After the start, the group card shows a calendar. Each row is a member. Each column is a day from the start date through today, or through the end date once the challenge is over. A due day is green or red when it has a check-in. A past due day with no check-in is red. A due day that is today or later with no check-in is an empty outline. A day the member is not due is a blank cell.
+
+Home shows your own days for each active challenge in weekly columns, Sunday at the top. It uses the same rules and the same check-ins. Logging a day again changes both views. The server picks today by UTC date.
+
 ## Check
 
 ```bash

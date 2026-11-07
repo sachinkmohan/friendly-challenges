@@ -13,6 +13,8 @@ import {
   type ChallengeInput,
   type RhythmInput,
 } from './challenge.ts'
+import { groupCalendar, listHeatmaps, utcToday } from './calendar.ts'
+import type { IsoDate } from './challenge.ts'
 import { listCheckIns, logCheckIn, type CheckInInput } from './checkins.ts'
 import { createGroup, joinGroup, listHomeGroups, viewGroup, type GroupId } from './groups.ts'
 import { authorizeUrl, exchangeCode, type GoogleConfig } from './google.ts'
@@ -42,6 +44,7 @@ export type AppDeps = {
   db: PGlite
   config: GoogleConfig
   fetch?: typeof fetch
+  today?: () => IsoDate
 }
 
 function requestOrigin(req: IncomingMessage): string {
@@ -79,6 +82,10 @@ async function viewerFrom(req: IncomingMessage, db: PGlite): Promise<Viewer> {
   return { state: 'signed_in', account }
 }
 
+function today(deps: AppDeps): IsoDate {
+  return (deps.today ?? utcToday)()
+}
+
 export function createApp(deps: AppDeps) {
   const fetchImpl = deps.fetch ?? fetch
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -97,6 +104,7 @@ export function createApp(deps: AppDeps) {
                 state: 'signed_in',
                 account: viewer.account,
                 groups: await listHomeGroups(deps.db, viewer.account),
+                heatmaps: await listHeatmaps(deps.db, viewer.account, today(deps)),
               })
         sendHtml(res, 200, home)
         return
@@ -322,8 +330,19 @@ async function sendMemberPage(
     sendHtml(res, 500, renderMessage('Something went wrong', 'Try that again.'))
     return
   }
-  const checkIns = loaded.card.phase === 'active' ? await listCheckIns(deps.db, groupId) : []
-  sendHtml(res, status, renderGroup({ ...view, challenge: loaded.card, checkIns }, viewer, origin, attempt))
+  const card = loaded.card
+  const checkIns = card.phase === 'active' ? await listCheckIns(deps.db, groupId) : []
+  const calendar =
+    card.phase === 'active'
+      ? groupCalendar({
+          window: { phase: 'active', startsOn: card.terms.startsOn, endsOn: card.terms.endsOn },
+          today: today(deps),
+          members: view.members,
+          rhythms: card.rhythms,
+          checkIns,
+        })
+      : null
+  sendHtml(res, status, renderGroup({ ...view, challenge: card, checkIns, calendar }, viewer, origin, attempt))
 }
 
 async function finishChallenge(
