@@ -1,5 +1,7 @@
+import { paymentFailureCopy, type Ledger, type Payment, type PaymentFailure, type PaymentInput } from './balances.ts'
 import {
   challengeFailureCopy,
+  formatMinor,
   formatStake,
   PRESET_LABELS,
   RHYTHM_LABELS,
@@ -171,6 +173,9 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
     }
     .count { color: #5c564c; }
     .members time, .rhythm { color: #5c564c; }
+    .net.owed { color: #2f7d4a; font-weight: 650; }
+    .net.owes { color: #b3392f; font-weight: 650; }
+    .net.even { color: #5c564c; }
     .member-name { flex: 1; min-width: 0; }
     .rhythm { flex-basis: 100%; padding-left: 68px; }
     .share { margin-top: 16px; overflow-wrap: anywhere; }
@@ -351,6 +356,7 @@ const challengeStartSuffix = '/challenge/start'
 const challengeSuffix = '/challenge'
 const rhythmSuffix = '/rhythm'
 const checkInSuffix = '/check-in'
+const paymentSuffix = '/payment'
 
 export type HomePage =
   | { state: 'signed_out' }
@@ -365,6 +371,7 @@ export type GroupRoute =
   | { kind: 'start_challenge'; groupId: GroupId }
   | { kind: 'save_rhythm'; groupId: GroupId }
   | { kind: 'log_check_in'; groupId: GroupId }
+  | { kind: 'record_payment'; groupId: GroupId }
 
 export function groupHref(groupId: GroupId): string {
   return `${groupsRoot}/${groupId}`
@@ -381,7 +388,7 @@ function googleReturnHref(returnPath: string): string {
 function routeSuffix(
   rest: string,
   suffix: string,
-  kind: 'start_challenge' | 'save_challenge' | 'save_rhythm' | 'log_check_in' | 'join',
+  kind: 'start_challenge' | 'save_challenge' | 'save_rhythm' | 'log_check_in' | 'record_payment' | 'join',
 ): GroupRoute | null {
   if (!rest.endsWith(suffix) || rest.length <= suffix.length) return null
   const idPart = rest.slice(0, -suffix.length)
@@ -401,6 +408,7 @@ export function matchGroupPath(path: string): GroupRoute | null {
     routeSuffix(rest, challengeSuffix, 'save_challenge') ??
     routeSuffix(rest, rhythmSuffix, 'save_rhythm') ??
     routeSuffix(rest, checkInSuffix, 'log_check_in') ??
+    routeSuffix(rest, paymentSuffix, 'record_payment') ??
     routeSuffix(rest, joinSuffix, 'join')
   if (suffixed) return suffixed
   if (rest.includes('/')) return null
@@ -570,6 +578,8 @@ type TermValues = {
 export type ChallengeAttempt = {
   failure?: ChallengeFailure
   checkInFailure?: CheckInFailure
+  paymentFailure?: PaymentFailure
+  paymentDraft?: PaymentInput
   draft?: ChallengeInput
   rhythmDraft?: RhythmInput
   checkInDay?: string
@@ -596,6 +606,7 @@ function headcountSentence(floor: number, cap: number): string {
 function failureParagraph(attempt?: ChallengeAttempt): string {
   if (attempt?.failure) return `<p>${escapeHtml(challengeFailureCopy[attempt.failure])}</p>`
   if (attempt?.checkInFailure) return `<p>${escapeHtml(checkInFailureCopy[attempt.checkInFailure])}</p>`
+  if (attempt?.paymentFailure) return `<p>${escapeHtml(paymentFailureCopy[attempt.paymentFailure])}</p>`
   return ''
 }
 
@@ -754,6 +765,66 @@ function checkInList(checkIns: readonly CheckIn[]): string {
   return `<p class="check-ins-title">Check-ins</p><ul class="check-ins">${checkIns.map(checkInItem).join('')}</ul>`
 }
 
+function money(ledger: Ledger, minor: number): string {
+  return `${formatMinor(minor, ledger.minorDigits)} ${ledger.currency}`
+}
+
+function netItem(ledger: Ledger, line: Ledger['nets'][number]): string {
+  const name = escapeHtml(line.displayName)
+  const amount = escapeHtml(money(ledger, Math.abs(line.netMinor)))
+  const sign = line.netMinor > 0 ? 'owed' : line.netMinor < 0 ? 'owes' : 'even'
+  const text =
+    sign === 'owed' ? `is owed ${amount}` : sign === 'owes' ? `owes ${amount}` : 'is even'
+  return `<li data-net="${escapeHtml(line.userId)}" data-minor="${line.netMinor}"><span class="member-name">${name}</span> <span class="net ${sign}">${text}</span></li>`
+}
+
+function openItem(ledger: Ledger, line: Ledger['open'][number]): string {
+  const amount = escapeHtml(money(ledger, line.amountMinor))
+  return `<li data-open="${escapeHtml(line.debtorId)}:${escapeHtml(line.creditorId)}" data-minor="${line.amountMinor}">${escapeHtml(line.debtorName)} owes ${escapeHtml(line.creditorName)} ${amount}</li>`
+}
+
+function paymentItem(ledger: Ledger, payment: Payment): string {
+  const when = escapeHtml(payment.paidOn)
+  const ref = payment.paypalRef ? ` <span class="count">PayPal ${escapeHtml(payment.paypalRef)}</span>` : ''
+  return `<li><span class="member-name">${escapeHtml(payment.payerName)} paid ${escapeHtml(payment.payeeName)} ${escapeHtml(money(ledger, payment.amountMinor))} <time datetime="${when}">${when}</time></span>${ref}</li>`
+}
+
+function paymentForm(groupId: GroupId, ledger: Ledger, userId: string, draft: PaymentInput | undefined): string {
+  const others = ledger.people.filter((person) => person.userId !== userId)
+  if (others.length === 0) return ''
+  const action = escapeHtml(`${groupHref(groupId)}${paymentSuffix}`)
+  const payees = optionList(
+    others.map((person) => ({ value: person.userId, label: person.displayName })),
+    draft?.payeeId ?? '',
+  )
+  return `<form method="post" action="${action}">
+      <p class="grid-title">Record a payment you made</p>
+      <p>The app does not send money. Record a payment that already happened.</p>
+      <label for="payment-payee">Paid to</label>
+      <select id="payment-payee" name="payee">${payees}</select>
+      <label for="payment-amount">Amount in ${escapeHtml(ledger.currency)}</label>
+      <input id="payment-amount" name="amount" value="${escapeHtml(draft?.amount ?? '')}" inputmode="decimal" autocomplete="off" required>
+      <label for="payment-date">Date paid</label>
+      <input id="payment-date" name="paid_on" type="date" value="${escapeHtml(draft?.paidOn ?? '')}" required>
+      <label for="payment-ref">PayPal reference (optional)</label>
+      <input id="payment-ref" name="paypal_ref" value="${escapeHtml(draft?.paypalRef ?? '')}" autocomplete="off">
+      <button type="submit">Record payment</button>
+    </form>`
+}
+
+function balancesSection(groupId: GroupId, ledger: Ledger, userId: string, draft: PaymentInput | undefined): string {
+  const nets = `<ul class="check-ins balances">${ledger.nets.map((line) => netItem(ledger, line)).join('')}</ul>`
+  const open =
+    ledger.open.length === 0
+      ? '<p>Nobody owes anyone.</p>'
+      : `<ul class="check-ins open-amounts">${ledger.open.map((line) => openItem(ledger, line)).join('')}</ul>`
+  const payments =
+    ledger.payments.length === 0
+      ? ''
+      : `<p class="check-ins-title">Payments</p><ul class="check-ins payments">${ledger.payments.map((item) => paymentItem(ledger, item)).join('')}</ul>`
+  return `<p class="check-ins-title">Balances</p>${nets}<p class="check-ins-title">Who owes whom</p>${open}${paymentForm(groupId, ledger, userId, draft)}${payments}`
+}
+
 function startForm(groupId: GroupId, activeCount: number, floor: number, cap: number): string {
   if (activeCount < floor || activeCount > cap) return ''
   const action = escapeHtml(`${groupHref(groupId)}/challenge/start`)
@@ -791,6 +862,7 @@ export function renderGroup(
         readonly challenge: MemberChallengeCard
         readonly checkIns: readonly CheckIn[]
         readonly calendar: GroupCalendar | null
+        readonly ledger: Ledger | null
       }),
   viewer: Viewer,
   origin: string,
@@ -838,6 +910,7 @@ export function renderGroup(
     ${checkIn}
     <ul class="members">${view.members.map((member) => memberItem(member, rhythms)).join('')}</ul>
     ${view.calendar ? calendarGrid(view.calendar) : ''}
+    ${view.ledger ? balancesSection(view.groupId, view.ledger, userId, attempt?.paymentDraft) : ''}
     ${checkInList(view.checkIns)}
     <p class="share">Share this link to invite someone. <a href="${share}">${share}</a></p>
   `)

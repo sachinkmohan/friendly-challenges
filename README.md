@@ -36,6 +36,16 @@ After the start, the group card shows a calendar. Each row is a member. Each col
 
 Home shows your own days for each active challenge in weekly columns, Sunday at the top. It uses the same rules and the same check-ins. Logging a day again changes both views. The server picks today by UTC date.
 
+## Balances
+
+After the start, the group card shows who owes whom. The app does not send money. Every red day on the calendar, including a past due day with no check-in, means the member who missed owes the per-day stake to each other member who was in the group that day. A green day owes nothing. There is no pot.
+
+Between two people, the app nets the debts in both directions, then subtracts recorded payments. Each member's net is positive when others owe them and negative when they owe others. The nets add up to zero.
+
+To record a payment you already made outside the app, choose **Paid to**, the amount in the challenge currency, the date, and an optional PayPal reference. Choose **Record payment**. The app never calls PayPal. The date cannot be in the future.
+
+Nothing is stored as a running total. The app works out the balances from check-ins, membership dates, and payments each time the page loads. When you change a red day to green, that day's debts go away.
+
 ## Check
 
 ```bash

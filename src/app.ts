@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PGlite } from '@electric-sql/pglite'
 import { upsertAccount } from './accounts.ts'
+import { readLedger, recordPayment, type PaymentFailure, type PaymentInput } from './balances.ts'
 import { clearCookie, readCookie, secretsMatch, writeCookie } from './cookies.ts'
 import {
   readChallengeHeadline,
@@ -226,6 +227,10 @@ async function handleGroup(
     await postCheckIn(req, res, method, origin, route.groupId, viewer, deps)
     return
   }
+  if (route.kind === 'record_payment') {
+    await postPayment(req, res, method, origin, route.groupId, viewer, deps)
+    return
+  }
   if (method !== 'POST') return rejectMethod(res, 'POST')
   if (viewer.state === 'signed_out') {
     const view = await viewGroup(deps.db, null, route.groupId)
@@ -342,7 +347,8 @@ async function sendMemberPage(
           checkIns,
         })
       : null
-  sendHtml(res, status, renderGroup({ ...view, challenge: card, checkIns, calendar }, viewer, origin, attempt))
+  const ledger = card.phase === 'active' ? await readLedger(deps.db, groupId, today(deps)) : null
+  sendHtml(res, status, renderGroup({ ...view, challenge: card, checkIns, calendar, ledger }, viewer, origin, attempt))
 }
 
 async function finishChallenge(
@@ -453,6 +459,52 @@ async function postCheckIn(
     checkInFailure: logged.failure,
     checkInDay: input.day,
   })
+}
+
+function paymentStatus(failure: PaymentFailure): number {
+  if (failure === 'not_member') return 403
+  if (failure === 'not_active') return 409
+  return 400
+}
+
+async function postPayment(
+  req: IncomingMessage,
+  res: ServerResponse,
+  method: string,
+  origin: string,
+  groupId: GroupId,
+  viewer: Viewer,
+  deps: AppDeps,
+): Promise<void> {
+  if (method !== 'POST') return rejectMethod(res, 'POST')
+  if (viewer.state === 'signed_out') {
+    req.resume()
+    await sendGroupPage(res, 401, null, groupId, origin, deps)
+    return
+  }
+  const form = await readForm(req)
+  if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
+  const input: PaymentInput = {
+    payeeId: form.get('payee') ?? '',
+    amount: form.get('amount') ?? '',
+    paidOn: form.get('paid_on') ?? '',
+    paypalRef: form.get('paypal_ref') ?? '',
+  }
+  const recorded = await recordPayment(deps.db, viewer.account, groupId, input, today(deps))
+  if (recorded.ok) {
+    sendRedirect(res, groupHref(groupId), [], 303)
+    return
+  }
+  if (recorded.failure === 'group_missing') {
+    notFound(res)
+    return
+  }
+  const attempt: ChallengeAttempt = { paymentFailure: recorded.failure, paymentDraft: input }
+  if (recorded.failure === 'not_member') {
+    await sendGroupPage(res, 403, viewer.account, groupId, origin, deps, attempt)
+    return
+  }
+  await sendMemberPage(res, paymentStatus(recorded.failure), viewer.account, groupId, origin, deps, attempt)
 }
 
 function rejectForm(res: ServerResponse, failure: 'too_large' | 'bad_type'): void {

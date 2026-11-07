@@ -363,11 +363,17 @@ export function memberIsDue(
   return count % RHYTHM_STEP[rhythm.kind] === 0
 }
 
-export function formatStake(stakeMinor: StakeMinor, minorDigits: number): string {
-  const digits = String(stakeMinor)
-  if (minorDigits === 0) return digits
+export function formatMinor(minor: number, minorDigits: number): string {
+  if (!Number.isSafeInteger(minor)) throw new Error('amount')
+  const sign = minor < 0 ? '-' : ''
+  const digits = String(Math.abs(minor))
+  if (minorDigits === 0) return `${sign}${digits}`
   const padded = digits.padStart(minorDigits + 1, '0')
-  return `${padded.slice(0, -minorDigits)}.${padded.slice(-minorDigits)}`
+  return `${sign}${padded.slice(0, -minorDigits)}.${padded.slice(-minorDigits)}`
+}
+
+export function formatStake(stakeMinor: StakeMinor, minorDigits: number): string {
+  return formatMinor(stakeMinor, minorDigits)
 }
 
 export function rhythmSlot(phase: 'draft' | 'active', rhythms: readonly RhythmLine[], userId: string): RhythmSlot {
@@ -414,19 +420,41 @@ function splitStake(raw: string): StakeParts | null {
   return { whole, frac }
 }
 
-function scaleStake(
+export type AmountFailure = 'not_positive' | 'too_large'
+
+export function parseMinorAmount(
+  raw: string,
+  minorDigits: number,
+  max: number,
+): { ok: true; minor: number } | { ok: false; failure: AmountFailure } {
+  const parts = splitStake(raw)
+  if (!parts) return { ok: false, failure: 'not_positive' }
+  return scaleAmount(parts, minorDigits, max)
+}
+
+function scaleAmount(
   parts: StakeParts,
   minorDigits: number,
-): { ok: true; stakeMinor: StakeMinor } | { ok: false; failure: 'stake_not_positive' | 'stake_too_large' } {
+  max: number,
+): { ok: true; minor: number } | { ok: false; failure: AmountFailure } {
   if (parts.frac !== null && (minorDigits === 0 || parts.frac.length > minorDigits)) {
-    return { ok: false, failure: 'stake_not_positive' }
+    return { ok: false, failure: 'not_positive' }
   }
   const frac = (parts.frac ?? '').padEnd(minorDigits, '0')
   const digits = `${parts.whole}${frac}`.replace(/^0+/, '') || '0'
   const value = BigInt(digits)
-  if (value === 0n) return { ok: false, failure: 'stake_not_positive' }
-  if (value > BigInt(STAKE_MINOR_MAX)) return { ok: false, failure: 'stake_too_large' }
-  return { ok: true, stakeMinor: Number(value) as StakeMinor }
+  if (value === 0n) return { ok: false, failure: 'not_positive' }
+  if (value > BigInt(max)) return { ok: false, failure: 'too_large' }
+  return { ok: true, minor: Number(value) }
+}
+
+function scaleStake(
+  parts: StakeParts,
+  minorDigits: number,
+): { ok: true; stakeMinor: StakeMinor } | { ok: false; failure: 'stake_not_positive' | 'stake_too_large' } {
+  const scaled = scaleAmount(parts, minorDigits, STAKE_MINOR_MAX)
+  if (!scaled.ok) return { ok: false, failure: scaled.failure === 'too_large' ? 'stake_too_large' : 'stake_not_positive' }
+  return { ok: true, stakeMinor: scaled.minor as StakeMinor }
 }
 
 function parseChallengeInput(
