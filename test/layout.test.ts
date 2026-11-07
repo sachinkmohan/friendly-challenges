@@ -16,7 +16,7 @@ const signedOut = {
   firebase: { apiKey: 'key', authDomain: 'friendly.firebaseapp.com', projectId: 'friendly' },
 } as const
 
-test('every page is the same phone shell', () => {
+test('every page is the same phone shell, full screen on a phone', () => {
   const groupId = parseGroupId('00000000-0000-4000-8000-000000000001')
   if (!groupId) throw new Error('fixture group id')
   const pages = [
@@ -42,7 +42,8 @@ test('every page is the same phone shell', () => {
     assert.match(html, /min-height: 48px/)
     assert.match(html, /overflow: hidden/)
     assert.match(html, /preventDefault/)
-    assert.doesNotMatch(html, /@media/)
+    assert.match(html, /@media \(max-width: 500px\), \(max-height: 500px\) \{\s*body \{ background: #efeae1; \}\s*\.device \{ width: 100%; height: 100dvh; padding: 0; border-radius: 0; box-shadow: none; \}\s*\.phone \{ border-radius: 0; \}\s*\.indicator \{ display: none; \}/)
+    assert.match(html, /<meta name="theme-color" content="#fffdf8">/)
     assert.doesNotMatch(html, /rel="manifest"/)
     assert.doesNotMatch(html, /apple-mobile-web-app/)
   }
