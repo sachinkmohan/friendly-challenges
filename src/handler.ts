@@ -1,4 +1,7 @@
+import { existsSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
 
 const dataDir = process.env.DATA_DIR ?? './data'
 
@@ -32,7 +35,7 @@ async function openApp() {
   const db =
     databaseUrl !== ''
       ? (await import('./hosted-db.ts')).openPostgres(databaseUrl)
-      : process.env.USE_EMBEDDED_DB === '1'
+      : embeddedWasmPresent()
         ? await openLocal()
         : await missingDatabase()
   const port = process.env.PORT ?? '3000'
@@ -46,6 +49,16 @@ async function openApp() {
       clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
     },
   })
+}
+
+function embeddedWasmPresent(): boolean {
+  try {
+    const require = createRequire(import.meta.url)
+    const entry = require.resolve('@electric-sql/pglite')
+    return existsSync(join(dirname(entry), 'pglite.wasm'))
+  } catch {
+    return false
+  }
 }
 
 async function missingDatabase(): Promise<never> {

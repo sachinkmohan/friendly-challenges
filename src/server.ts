@@ -19,10 +19,7 @@ export default function handler(req: IncomingMessage, res: ServerResponse): Prom
   return serve(req, res)
 }
 
-if ((process.env.DATABASE_URL?.trim() ?? '') === '') process.env.USE_EMBEDDED_DB = '1'
-
-try {
-  server.listen(port)
-} catch (error) {
+server.on('error', (error) => {
   console.error(error)
-}
+})
+server.listen(port)
