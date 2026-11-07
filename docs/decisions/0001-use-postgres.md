@@ -1,6 +1,6 @@
 # 0001: We will use Postgres
 
-- **Status:** accepted
+- **Status:** superseded by [0005](0005-use-firestore.md)
 - **Date:** 2026-11-06
 
 ## Context

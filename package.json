@@ -6,13 +6,16 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "node --experimental-strip-types scripts/migrate.ts",
+    "build": "node --experimental-strip-types scripts/seed.ts",
     "start": "node --env-file-if-exists=.env --experimental-strip-types src/server.ts",
-    "dev": "node --env-file-if-exists=.env --experimental-strip-types src/dev-server.ts",
-    "test": "node --experimental-strip-types --test test/*.ts"
+    "dev": "firebase emulators:exec --only firestore --project demo-friendly-challenges \"node --env-file-if-exists=.env --experimental-strip-types src/dev-server.ts\"",
+    "test": "firebase emulators:exec --only firestore --project demo-friendly-challenges \"node --experimental-strip-types --test test/*.ts\""
   },
   "dependencies": {
-    "@electric-sql/pglite": "^0.5.15",
-    "pg": "^8.23.1"
+    "firebase-admin": "^14.5.0",
+    "serverless-http": "^3.2.0"
+  },
+  "devDependencies": {
+    "firebase-tools": "^15.35.0"
   }
 }

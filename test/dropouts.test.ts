@@ -1,21 +1,14 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { createServer } from 'node:http'
-import type { AddressInfo } from 'node:net'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { test } from 'node:test'
-import type { PGlite } from '@electric-sql/pglite'
-import { upsertAccount } from '../src/accounts.ts'
-import { createApp } from '../src/app.ts'
 import { readLedger, type Ledger } from '../src/balances.ts'
 import { parseIsoDate, saveChallenge, saveRhythm, startChallenge, type IsoDate } from '../src/challenge.ts'
 import { logCheckIn } from '../src/checkins.ts'
-import { openDatabase } from '../src/db.ts'
+import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
 import { recordDropout } from '../src/dropouts.ts'
-import { createGroup, joinGroup, viewGroup, type GroupId } from '../src/groups.ts'
+import { joinGroup, viewGroup, type GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
-import { createSession } from '../src/sessions.ts'
+import { readCheckIns, readGroup } from '../src/store.ts'
+import { closeServer, cookieFor, groupWith, listen, person, post, setJoinedOn } from './support/fixtures.ts'
 
 function iso(raw: string): IsoDate {
   const day = parseIsoDate(raw)
@@ -25,33 +18,16 @@ function iso(raw: string): IsoDate {
 
 const today = iso('2026-11-06')
 
-async function person(db: PGlite, name: string): Promise<Account> {
-  const saved = await upsertAccount(db, {
-    sub: `sub-${name}`,
-    email: `${name.toLowerCase()}@example.com`,
-    emailVerified: true,
-    displayName: name,
-    avatarUrl: null,
-  })
-  if (!saved.ok) throw new Error('account')
-  return saved.account
+async function group(db: Database, creator: Account, others: readonly Account[]): Promise<GroupId> {
+  const groupId = await groupWith(db, [creator, ...others])
+  await setJoinedOn(db, groupId, '2026-11-01')
+  return groupId
 }
 
-async function group(db: PGlite, creator: Account, others: readonly Account[]): Promise<GroupId> {
-  const created = await createGroup(db, creator, 'Morning run')
-  if (!created.ok) throw new Error(created.failure)
-  for (const who of others) {
-    const joined = await joinGroup(db, who, created.groupId)
-    if (!joined.ok) throw new Error(joined.failure)
-  }
-  await db.query(`UPDATE memberships SET joined_on = '2026-11-01' WHERE group_id = $1`, [created.groupId])
-  return created.groupId
-}
-
-type Crew = { db: PGlite; ada: Account; grace: Account; lin: Account; groupId: GroupId }
+type Crew = { db: Database; ada: Account; grace: Account; lin: Account; groupId: GroupId }
 
 async function activeCrew(): Promise<Crew> {
-  const db = await openDatabase()
+  const db = openTestDatabase()
   const ada = await person(db, 'Ada')
   const grace = await person(db, 'Grace')
   const lin = await person(db, 'Lin')
@@ -75,15 +51,13 @@ async function activeCrew(): Promise<Crew> {
   return { db, ada, grace, lin, groupId }
 }
 
-async function leftOn(db: PGlite, groupId: GroupId): Promise<Record<string, string | null>> {
-  const rows = await db.query<{ user_id: string; left_on: string | null }>(
-    `SELECT user_id::text AS user_id, to_char(left_on, 'YYYY-MM-DD') AS left_on FROM memberships WHERE group_id = $1`,
-    [groupId],
-  )
-  return Object.fromEntries(rows.rows.map((row) => [row.user_id, row.left_on]))
+async function leftOn(db: Database, groupId: GroupId): Promise<Record<string, string | null>> {
+  const read = await readGroup(db, groupId)
+  assert.ok(read)
+  return Object.fromEntries(Object.entries(read.members).map(([userId, member]) => [userId, member.leftOn]))
 }
 
-async function ledger(db: PGlite, groupId: GroupId): Promise<Ledger> {
+async function ledger(db: Database, groupId: GroupId): Promise<Ledger> {
   const read = await readLedger(db, groupId, today)
   if (!read) throw new Error('ledger')
   return read
@@ -106,6 +80,7 @@ test('the member or the group creator records a dropout and anyone else cannot',
     assert.deepEqual(await drop(grace, lin.id, '2026-11-03'), { ok: false, failure: 'not_allowed' })
     assert.deepEqual(await drop(noor, noor.id, '2026-11-03'), { ok: false, failure: 'not_member' })
     assert.deepEqual(await drop(ada, 'nobody', '2026-11-03'), { ok: false, failure: 'bad_member' })
+    assert.deepEqual(await drop(ada, 'constructor', '2026-11-03'), { ok: false, failure: 'bad_member' })
     assert.deepEqual(await drop(ada, noor.id, '2026-11-03'), { ok: false, failure: 'bad_member' })
     assert.deepEqual(await drop(ada, grace.id, '2026-02-30'), { ok: false, failure: 'bad_day' })
     assert.deepEqual(await drop(ada, grace.id, '2026-10-31'), { ok: false, failure: 'before_join' })
@@ -124,7 +99,7 @@ test('the member or the group creator records a dropout and anyone else cannot',
       failure: 'group_missing',
     })
   } finally {
-    await db.close()
+    await closeDatabase(db)
   }
 })
 
@@ -171,12 +146,12 @@ test('debts through the last day stay and later days owe the leaver nothing and 
       failure: 'outside_membership',
     })
   } finally {
-    await db.close()
+    await closeDatabase(db)
   }
 })
 
 test('a dropout can leave fewer than 3 active and frees a seat in a full group', async () => {
-  const db = await openDatabase()
+  const db = openTestDatabase()
   try {
     const [ada, grace, lin, noor, omar, priya, quinn] = await Promise.all(
       ['Ada', 'Grace', 'Lin', 'Noor', 'Omar', 'Priya', 'Quinn'].map((name) => person(db, name)),
@@ -190,34 +165,16 @@ test('a dropout can leave fewer than 3 active and frees a seat in a full group',
     const full = await group(db, ada, [grace, lin, noor, omar])
     assert.deepEqual(await joinGroup(db, priya, full), { ok: false, failure: 'group_full' })
     assert.deepEqual(await recordDropout(db, omar, full, { memberId: omar.id, lastDay: '2026-11-05' }, today), { ok: true })
-    assert.deepEqual(await joinGroup(db, priya, full), { ok: true, groupId: full })
-    assert.deepEqual(await joinGroup(db, quinn, full), { ok: false, failure: 'group_full' })
+    const joins = await Promise.all([joinGroup(db, priya, full), joinGroup(db, quinn, full)])
+    assert.equal(joins.filter((joined) => joined.ok).length, 1)
+    assert.deepEqual(joins.find((joined) => !joined.ok), { ok: false, failure: 'group_full' })
   } finally {
-    await db.close()
+    await closeDatabase(db)
   }
 })
 
-async function listen(db: PGlite) {
-  const app = createApp({ db, config: { clientId: 'client-id', clientSecret: 'client-secret' }, today: () => today })
-  const server = createServer((req, res) => {
-    void app(req, res)
-  })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const address = server.address() as AddressInfo
-  return { server, base: `http://127.0.0.1:${address.port}` }
-}
-
-async function cookieFor(db: PGlite, account: Account): Promise<string> {
-  return `session=${encodeURIComponent(await createSession(db, account.id))}`
-}
-
-async function post(base: string, path: string, cookie: string | null, fields: Record<string, string>) {
-  return fetch(`${base}${path}`, {
-    method: 'POST',
-    redirect: 'manual',
-    headers: { ...(cookie ? { cookie } : {}), 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(fields).toString(),
-  })
+function fields(values: Record<string, string>): string {
+  return new URLSearchParams(values).toString()
 }
 
 function rowOf(html: string, userId: string): string {
@@ -236,7 +193,7 @@ test('the group card records a dropout and the leaver keeps a calendar row with 
   const graceCookie = await cookieFor(db, grace)
   const linCookie = await cookieFor(db, lin)
   const noorCookie = await cookieFor(db, await person(db, 'Noor'))
-  const { server, base } = await listen(db)
+  const { server, base } = await listen(db, () => today)
   const groupPath = `/groups/${groupId}`
   const dropoutPath = `${groupPath}/dropout`
   const page = async (cookie: string) => (await fetch(`${base}${groupPath}`, { headers: { cookie } })).text()
@@ -255,16 +212,16 @@ test('the group card records a dropout and the leaver keeps a calendar row with 
     const looked = await fetch(`${base}${dropoutPath}`, { headers: { cookie: adaCookie } })
     assert.equal(looked.status, 405)
     assert.equal(looked.headers.get('allow'), 'POST')
-    assert.equal((await post(base, dropoutPath, null, { member: lin.id, last_day: '2026-11-03' })).status, 401)
+    assert.equal((await post(base, dropoutPath, null, fields({ member: lin.id, last_day: '2026-11-03' }))).status, 401)
 
-    const notAllowed = await post(base, dropoutPath, graceCookie, { member: lin.id, last_day: '2026-11-03' })
+    const notAllowed = await post(base, dropoutPath, graceCookie, fields({ member: lin.id, last_day: '2026-11-03' }))
     assert.equal(notAllowed.status, 403)
     assert.match(await notAllowed.text(), /Only that member or the person who made the group can record this\./)
-    const outsider = await post(base, dropoutPath, noorCookie, { member: lin.id, last_day: '2026-11-03' })
+    const outsider = await post(base, dropoutPath, noorCookie, fields({ member: lin.id, last_day: '2026-11-03' }))
     assert.equal(outsider.status, 403)
     assert.match(await outsider.text(), /Join the group before you record a dropout\./)
 
-    const future = await post(base, dropoutPath, adaCookie, { member: grace.id, last_day: '2026-11-07' })
+    const future = await post(base, dropoutPath, adaCookie, fields({ member: grace.id, last_day: '2026-11-07' }))
     assert.equal(future.status, 400)
     const futureHtml = await future.text()
     assert.match(futureHtml, /Pick a last day that is today or earlier\./)
@@ -272,10 +229,10 @@ test('the group card records a dropout and the leaver keeps a calendar row with 
     assert.match(dropoutForm(futureHtml), new RegExp(`<option value="${grace.id}" selected>`))
     assert.deepEqual(await leftOn(db, groupId), { [ada.id]: null, [grace.id]: null, [lin.id]: null })
 
-    const self = await post(base, dropoutPath, linCookie, { member: lin.id, last_day: '2026-11-03' })
+    const self = await post(base, dropoutPath, linCookie, fields({ member: lin.id, last_day: '2026-11-03' }))
     assert.equal(self.status, 303)
     assert.equal(self.headers.get('location'), '/')
-    const other = await post(base, dropoutPath, adaCookie, { member: grace.id, last_day: '2026-11-05' })
+    const other = await post(base, dropoutPath, adaCookie, fields({ member: grace.id, last_day: '2026-11-05' }))
     assert.equal(other.status, 303)
     assert.equal(other.headers.get('location'), groupPath)
 
@@ -289,40 +246,12 @@ test('the group card records a dropout and the leaver keeps a calendar row with 
     assert.equal(markOn(graceRow, '2026-11-06'), 'blank')
     assert.equal(markOn(rowOf(after, ada.id), '2026-11-06'), 'empty')
 
-    const lateCheckIn = await post(base, `${groupPath}/check-in`, linCookie, { day: '2026-11-04', color: 'green' })
+    const lateCheckIn = await post(base, `${groupPath}/check-in`, linCookie, fields({ day: '2026-11-04', color: 'green' }))
     assert.equal(lateCheckIn.status, 400)
     assert.match(await lateCheckIn.text(), /You were not in the group on that day\./)
-    const stored = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM check_ins`)
-    assert.equal(Number(stored.rows[0]?.n), 0)
+    assert.deepEqual(await readCheckIns(db, groupId), [])
   } finally {
-    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
-    await db.close()
-  }
-})
-
-test('reopening the same data dir runs the migration again and fills a missing creator from the first member', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'friendly-challenges-'))
-  try {
-    const first = await openDatabase(dir)
-    const ada = await person(first, 'Ada')
-    const grace = await person(first, 'Grace')
-    const groupId = await group(first, ada, [grace])
-    await first.query(`UPDATE memberships SET joined_on = '2026-10-01' WHERE user_id = $1`, [grace.id])
-    await first.query(`ALTER TABLE groups ALTER COLUMN created_by DROP NOT NULL`)
-    await first.query(`UPDATE groups SET created_by = NULL`)
-    await first.close()
-
-    const second = await openDatabase(dir)
-    try {
-      const row = await second.query<{ created_by: string }>(`SELECT created_by::text AS created_by FROM groups WHERE id = $1`, [
-        groupId,
-      ])
-      assert.deepEqual(row.rows, [{ created_by: grace.id }])
-      await assert.rejects(second.query(`UPDATE groups SET created_by = NULL`))
-    } finally {
-      await second.close()
-    }
-  } finally {
-    await rm(dir, { recursive: true, force: true })
+    await closeServer(server)
+    await closeDatabase(db)
   }
 })

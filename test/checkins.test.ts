@@ -1,54 +1,29 @@
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
-import type { AddressInfo } from 'node:net'
 import { test } from 'node:test'
-import type { PGlite } from '@electric-sql/pglite'
-import { upsertAccount } from '../src/accounts.ts'
-import { createApp } from '../src/app.ts'
 import { saveChallenge, saveRhythm, startChallenge, type RhythmKind } from '../src/challenge.ts'
 import { listCheckIns, logCheckIn } from '../src/checkins.ts'
-import { openDatabase } from '../src/db.ts'
-import { createGroup, joinGroup, parseGroupId, type GroupId } from '../src/groups.ts'
+import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
+import { parseGroupId, type GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
 import { safeReturnPath } from '../src/page.ts'
-import { createSession } from '../src/sessions.ts'
+import { readCheckIns } from '../src/store.ts'
+import { closeServer, cookieFor, groupWith, listen, person, post, setJoinedOn, setLeftOn } from './support/fixtures.ts'
 
-async function person(db: PGlite, name: string): Promise<Account> {
-  const saved = await upsertAccount(db, {
-    sub: `sub-${name}`,
-    email: `${name.toLowerCase()}@example.com`,
-    emailVerified: true,
-    displayName: name,
-    avatarUrl: null,
-  })
-  if (!saved.ok) throw new Error('account')
-  return saved.account
-}
+type Crew = { db: Database; ada: Account; grace: Account; lin: Account; groupId: GroupId }
 
-type Crew = { db: PGlite; ada: Account; grace: Account; lin: Account; groupId: GroupId }
-
-async function rhythm(db: PGlite, who: Account, groupId: GroupId, interval: RhythmKind, anchorOn: string) {
+async function rhythm(db: Database, who: Account, groupId: GroupId, interval: RhythmKind, anchorOn: string) {
   const saved = await saveRhythm(db, who, groupId, { interval, anchorOn })
   if (!saved.ok) throw new Error(saved.failure)
 }
 
 async function activeCrew(options: { start?: boolean } = {}): Promise<Crew> {
-  const db = await openDatabase()
+  const db = openTestDatabase()
   const ada = await person(db, 'Ada')
   const grace = await person(db, 'Grace')
   const lin = await person(db, 'Lin')
-  const created = await createGroup(db, ada, 'Morning run')
-  if (!created.ok) throw new Error(created.failure)
-  const groupId = created.groupId
-  for (const member of [grace, lin]) {
-    const joined = await joinGroup(db, member, groupId)
-    if (!joined.ok) throw new Error(joined.failure)
-  }
-  await db.query(`UPDATE memberships SET joined_on = '2026-11-01' WHERE group_id = $1`, [groupId])
-  await db.query(`UPDATE memberships SET joined_on = '2026-11-05' WHERE group_id = $1 AND user_id = $2`, [
-    groupId,
-    lin.id,
-  ])
+  const groupId = await groupWith(db, [ada, grace, lin])
+  await setJoinedOn(db, groupId, '2026-11-01', [ada.id, grace.id])
+  await setJoinedOn(db, groupId, '2026-11-05', [lin.id])
   const saved = await saveChallenge(db, ada, groupId, {
     name: 'No sweets',
     type: 'no_sugar',
@@ -84,7 +59,7 @@ test('a due day saves once and a second save replaces the color', async () => {
     const ada3 = (await listCheckIns(db, groupId)).filter((item) => item.userId === ada.id)
     assert.deepEqual(ada3, [{ userId: ada.id, displayName: 'Ada', day: '2026-11-03', color: 'red' }])
   } finally {
-    await db.close()
+    await closeDatabase(db)
   }
 })
 
@@ -110,7 +85,7 @@ test('a day that is not due is rejected and nothing is written', async () => {
     })
     assert.deepEqual(await listCheckIns(db, groupId), [])
   } finally {
-    await db.close()
+    await closeDatabase(db)
   }
 })
 
@@ -122,7 +97,7 @@ test('a draft challenge has no due days', async () => {
       failure: 'not_due',
     })
   } finally {
-    await db.close()
+    await closeDatabase(db)
   }
 })
 
@@ -136,10 +111,7 @@ test('a day before joining or after leaving is rejected', async () => {
     })
     assert.deepEqual(await logCheckIn(db, lin, groupId, { day: '2026-11-05', color: 'green' }), { ok: true })
 
-    await db.query(`UPDATE memberships SET left_on = '2026-11-10' WHERE group_id = $1 AND user_id = $2`, [
-      groupId,
-      grace.id,
-    ])
+    await setLeftOn(db, groupId, grace.id, '2026-11-10')
     assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-12', color: 'green' }), {
       ok: false,
       failure: 'outside_membership',
@@ -164,21 +136,7 @@ test('a day before joining or after leaving is rejected', async () => {
       ],
     )
   } finally {
-    await db.close()
-  }
-})
-
-test('the database refuses a color other than green or red', async () => {
-  const { db, ada, groupId } = await activeCrew()
-  try {
-    await assert.rejects(
-      db.query(`INSERT INTO check_ins (group_id, user_id, day, color) VALUES ($1, $2, '2026-11-03', 'amber')`, [
-        groupId,
-        ada.id,
-      ]),
-    )
-  } finally {
-    await db.close()
+    await closeDatabase(db)
   }
 })
 
@@ -186,27 +144,8 @@ test('a check-in path is not a sign-in return path', () => {
   assert.equal(safeReturnPath('/groups/00000000-0000-4000-8000-000000000001/check-in'), '/')
 })
 
-async function listen(db: PGlite) {
-  const app = createApp({ db, config: { clientId: 'client-id', clientSecret: 'client-secret' } })
-  const server = createServer((req, res) => {
-    void app(req, res)
-  })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const address = server.address() as AddressInfo
-  return { server, base: `http://127.0.0.1:${address.port}` }
-}
-
-async function cookieFor(db: PGlite, account: Account): Promise<string> {
-  return `session=${encodeURIComponent(await createSession(db, account.id))}`
-}
-
-async function post(base: string, path: string, cookie: string | null, fields: Record<string, string>) {
-  return fetch(`${base}${path}`, {
-    method: 'POST',
-    redirect: 'manual',
-    headers: { ...(cookie ? { cookie } : {}), 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(fields).toString(),
-  })
+function fields(values: Record<string, string>): string {
+  return new URLSearchParams(values).toString()
 }
 
 test('the group card logs a day and lists who logged what', async () => {
@@ -228,15 +167,15 @@ test('the group card logs a day and lists who logged what', async () => {
     assert.equal(looked.status, 405)
     assert.equal(looked.headers.get('allow'), 'POST')
 
-    const signedOut = await post(base, checkInPath, null, { day: '2026-11-03', color: 'green' })
+    const signedOut = await post(base, checkInPath, null, fields({ day: '2026-11-03', color: 'green' }))
     assert.equal(signedOut.status, 401)
 
-    const saved = await post(base, checkInPath, adaCookie, { day: '2026-11-03', color: 'green' })
+    const saved = await post(base, checkInPath, adaCookie, fields({ day: '2026-11-03', color: 'green' }))
     assert.equal(saved.status, 303)
     assert.equal(saved.headers.get('location'), groupPath)
-    const replaced = await post(base, checkInPath, adaCookie, { day: '2026-11-03', color: 'red' })
+    const replaced = await post(base, checkInPath, adaCookie, fields({ day: '2026-11-03', color: 'red' }))
     assert.equal(replaced.status, 303)
-    const graceSaved = await post(base, checkInPath, graceCookie, { day: '2026-11-04', color: 'green' })
+    const graceSaved = await post(base, checkInPath, graceCookie, fields({ day: '2026-11-04', color: 'green' }))
     assert.equal(graceSaved.status, 303)
 
     const after = await (await fetch(`${base}${groupPath}`, { headers: { cookie: graceCookie } })).text()
@@ -247,20 +186,29 @@ test('the group card logs a day and lists who logged what', async () => {
     )
     assert.doesNotMatch(list, /swatch green[^<]*<\/span> <span class="member-name">Ada/)
 
-    const offDay = await post(base, checkInPath, graceCookie, { day: '2026-11-05', color: 'green' })
+    const offDay = await post(base, checkInPath, graceCookie, fields({ day: '2026-11-05', color: 'green' }))
     assert.equal(offDay.status, 400)
     const offHtml = await offDay.text()
     assert.match(offHtml, /That day is not one of your logging days\./)
     assert.match(offHtml, /value="2026-11-05"/)
 
-    const stranger = await post(base, checkInPath, outsiderCookie, { day: '2026-11-03', color: 'green' })
+    const stranger = await post(base, checkInPath, outsiderCookie, fields({ day: '2026-11-03', color: 'green' }))
     assert.equal(stranger.status, 403)
     assert.match(await stranger.text(), /Join the group before you log a day\./)
 
-    const rows = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM check_ins`)
-    assert.equal(Number(rows.rows[0]?.n), 2)
+    const amber = await post(base, checkInPath, adaCookie, fields({ day: '2026-11-05', color: 'amber' }))
+    assert.equal(amber.status, 400)
+    assert.match(await amber.text(), /Pick green or red\./)
+
+    assert.deepEqual(
+      (await readCheckIns(db, groupId)).map((item) => [item.userId, item.day, item.color]).sort(),
+      [
+        [ada.id, '2026-11-03', 'red'],
+        [grace.id, '2026-11-04', 'green'],
+      ].sort(),
+    )
   } finally {
-    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
-    await db.close()
+    await closeServer(server)
+    await closeDatabase(db)
   }
 })

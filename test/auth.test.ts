@@ -1,14 +1,12 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { test } from 'node:test'
 import type { AddressInfo } from 'node:net'
 import { countUsers, upsertAccount } from '../src/accounts.ts'
 import { createApp } from '../src/app.ts'
-import { openDatabase } from '../src/db.ts'
+import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
 import { parseGoogleUserInfo } from '../src/google.ts'
 import { accountForSession, countSessions } from '../src/sessions.ts'
-import type { PGlite } from '@electric-sql/pglite'
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const USERINFO_URL = 'https://www.googleapis.com/oauth2/v3/userinfo'
@@ -39,7 +37,7 @@ function googleFetch(profile: () => Profile, seen: { tokenBody: string }) {
   }) as typeof fetch
 }
 
-async function listen(db: PGlite, profile: () => Profile, seen: { tokenBody: string }) {
+async function listen(db: Database, profile: () => Profile, seen: { tokenBody: string }) {
   const app = createApp({
     db,
     config: { clientId: 'client-id', clientSecret: 'client-secret' },
@@ -87,7 +85,7 @@ test('parseGoogleUserInfo reads sub, email, name, and picture', () => {
 })
 
 test('the same Google ID updates one account', async () => {
-  const db = await openDatabase()
+  const db = openTestDatabase()
   const first = await upsertAccount(db, {
     sub: 'google-sub-1',
     email: 'ada@example.com',
@@ -117,11 +115,11 @@ test('the same Google ID updates one account', async () => {
   assert.equal(second.account.displayName, 'Ada Lovelace')
   assert.equal(second.account.avatarUrl, null)
   assert.equal(await countUsers(db), 2)
-  await db.close()
+  await closeDatabase(db)
 })
 
 test('an unverified email does not create an account', async () => {
-  const db = await openDatabase()
+  const db = openTestDatabase()
   const result = await upsertAccount(db, {
     sub: 'google-sub-1',
     email: 'ada@example.com',
@@ -131,13 +129,11 @@ test('an unverified email does not create an account', async () => {
   })
   assert.deepEqual(result, { ok: false, failure: 'unverified_email' })
   assert.equal(await countUsers(db), 0)
-  await db.exec(readFileSync(new URL('../db/001_accounts.sql', import.meta.url), 'utf8'))
-  assert.equal(await countUsers(db), 0)
-  await db.close()
+  await closeDatabase(db)
 })
 
 test('Google sign-in, repeat sign-in, and sign-out', async () => {
-  const db = await openDatabase()
+  const db = openTestDatabase()
   let current: Profile = {
     sub: 'google-sub-1',
     email: 'ada@example.com',
@@ -232,12 +228,12 @@ test('Google sign-in, repeat sign-in, and sign-out', async () => {
     assert.equal(await countSessions(db), 1)
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
-    await db.close()
+    await closeDatabase(db)
   }
 })
 
 test('missing Google credentials do not start a redirect', async () => {
-  const db = await openDatabase()
+  const db = openTestDatabase()
   const app = createApp({
     db,
     config: { clientId: '', clientSecret: '' },
@@ -253,6 +249,6 @@ test('missing Google credentials do not start a redirect', async () => {
     assert.match(await response.text(), /GOOGLE_CLIENT_ID/)
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
-    await db.close()
+    await closeDatabase(db)
   }
 })

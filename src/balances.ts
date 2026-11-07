@@ -1,17 +1,32 @@
-import type { Database } from './hosted-db.ts'
+import { Timestamp } from 'firebase-admin/firestore'
+import type { Database } from './db.ts'
 import { buildCalendar, type CalendarMember, type CalendarSpan, type GroupCalendar } from './calendar.ts'
 import {
-  isRhythmKind,
   parseIsoDate,
   parseMinorAmount,
+  rhythmFrom,
+  spanFrom,
+  windowFrom,
   type CurrencyCode,
   type IsoDate,
   type MembershipSpan,
-  type Rhythm,
 } from './challenge.ts'
+import { minorDigitsOf } from './currencies.ts'
 import { isColor, type CheckInColor } from './checkins.ts'
 import type { GroupId } from './groups.ts'
 import type { Account } from './identity.ts'
+import {
+  compare,
+  memberOf,
+  paymentRef,
+  readCheckIns,
+  readGroup,
+  readPayments,
+  readUsers,
+  rhythmOf,
+  type GroupDoc,
+  type PaymentDoc,
+} from './store.ts'
 
 export const PAYMENT_MINOR_MAX = 1_000_000_000_000
 const PAYPAL_REF_MAX = 64
@@ -179,10 +194,6 @@ export function settle(
   }
 }
 
-type Sql = {
-  query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>
-}
-
 class PaymentRejected extends Error {
   readonly failure: PaymentFailure
 
@@ -190,23 +201,6 @@ class PaymentRejected extends Error {
     super(failure)
     this.failure = failure
   }
-}
-
-function dateFrom(value: unknown): IsoDate {
-  const parsed = typeof value === 'string' ? parseIsoDate(value) : null
-  if (!parsed) throw new Error('date')
-  return parsed
-}
-
-function minorFrom(value: unknown): number {
-  const parsed = typeof value === 'bigint' ? Number(value) : typeof value === 'string' ? Number(value) : value
-  if (typeof parsed !== 'number' || !Number.isSafeInteger(parsed)) throw new Error('amount')
-  return parsed
-}
-
-function textFrom(value: unknown, what: string): string {
-  if (typeof value !== 'string') throw new Error(what)
-  return value
 }
 
 type ActiveTerms = {
@@ -217,101 +211,82 @@ type ActiveTerms = {
   readonly endsOn: IsoDate
 }
 
-async function loadActiveTerms(sql: Sql, groupId: GroupId, lock: boolean): Promise<ActiveTerms | null> {
-  const result = await sql.query<Record<string, unknown>>(
-    `SELECT btrim(c.currency) AS currency, k.minor_digits, c.stake_minor,
-            to_char(c.starts_on, 'YYYY-MM-DD') AS starts_on, to_char(c.ends_on, 'YYYY-MM-DD') AS ends_on
-     FROM challenges c
-     JOIN currency_codes k ON k.code = c.currency
-     WHERE c.group_id = $1::uuid AND c.phase = 'active'
-     ${lock ? 'FOR SHARE OF c' : ''}`,
-    [groupId],
-  )
-  const row = result.rows[0]
-  if (!row) return null
+function activeTerms(group: GroupDoc): ActiveTerms | null {
+  const window = windowFrom(group.challenge)
+  if (!group.challenge || window?.phase !== 'active') return null
+  const minorDigits = minorDigitsOf(group.challenge.currency)
+  if (minorDigits === null) throw new Error('currency')
   return {
-    currency: textFrom(row.currency, 'currency') as CurrencyCode,
-    minorDigits: minorFrom(row.minor_digits),
-    stakeMinor: minorFrom(row.stake_minor),
-    startsOn: dateFrom(row.starts_on),
-    endsOn: dateFrom(row.ends_on),
+    currency: group.challenge.currency as CurrencyCode,
+    minorDigits,
+    stakeMinor: group.challenge.stakeMinor,
+    startsOn: window.startsOn,
+    endsOn: window.endsOn,
   }
 }
 
-async function loadMembers(db: Database, groupId: GroupId): Promise<readonly CalendarMember[]> {
-  const people = await db.query<Record<string, unknown>>(
-    `SELECT m.user_id::text AS user_id, u.display_name,
-            to_char(m.joined_on, 'YYYY-MM-DD') AS joined_on, to_char(m.left_on, 'YYYY-MM-DD') AS left_on,
-            r.kind, to_char(r.anchor_on, 'YYYY-MM-DD') AS anchor_on
-     FROM memberships m
-     JOIN users u ON u.id = m.user_id
-     LEFT JOIN logging_rhythms r ON r.group_id = m.group_id AND r.user_id = m.user_id
-     WHERE m.group_id = $1::uuid
-     ORDER BY m.joined_on, u.display_name, m.user_id`,
-    [groupId],
-  )
-  const checkIns = await db.query<Record<string, unknown>>(
-    `SELECT user_id::text AS user_id, to_char(day, 'YYYY-MM-DD') AS day, color
-     FROM check_ins
-     WHERE group_id = $1::uuid`,
-    [groupId],
-  )
-  return people.rows.map((row) => {
-    const userId = textFrom(row.user_id, 'member')
-    let rhythm: Rhythm | null = null
-    if (row.kind !== null) {
-      if (typeof row.kind !== 'string' || !isRhythmKind(row.kind)) throw new Error('rhythm')
-      rhythm = { kind: row.kind, anchorOn: dateFrom(row.anchor_on) }
-    }
+function dateFrom(value: string): IsoDate {
+  const parsed = parseIsoDate(value)
+  if (!parsed) throw new Error('date')
+  return parsed
+}
+
+async function loadMembers(db: Database, groupId: GroupId, group: GroupDoc): Promise<readonly CalendarMember[]> {
+  const userIds = Object.keys(group.members)
+  const [users, checkIns] = await Promise.all([readUsers(db, userIds), readCheckIns(db, groupId)])
+  const members = userIds.flatMap((userId): CalendarMember[] => {
+    const user = users.get(userId)
+    const span = spanFrom(memberOf(group, userId))
+    if (!user || !span) return []
     const colors = new Map<IsoDate, CheckInColor>()
-    for (const item of checkIns.rows) {
-      if (item.user_id !== userId) continue
-      if (typeof item.color !== 'string' || !isColor(item.color)) throw new Error('check-in color')
+    for (const item of checkIns) {
+      if (item.userId !== userId) continue
+      if (!isColor(item.color)) throw new Error('check-in color')
       colors.set(dateFrom(item.day), item.color)
     }
-    return {
-      userId,
-      displayName: textFrom(row.display_name, 'member name'),
-      span: { joinedOn: dateFrom(row.joined_on), leftOn: row.left_on === null ? null : dateFrom(row.left_on) },
-      rhythm,
-      colors,
-    }
+    return [{ userId, displayName: user.displayName, span, rhythm: rhythmFrom(rhythmOf(group, userId)), colors }]
   })
+  return members.sort(
+    (a, b) =>
+      compare(a.span.joinedOn, b.span.joinedOn) || compare(a.displayName, b.displayName) || compare(a.userId, b.userId),
+  )
 }
 
 async function loadPayments(db: Database, groupId: GroupId): Promise<readonly Payment[]> {
-  const result = await db.query<Record<string, unknown>>(
-    `SELECT p.id::text AS id, p.payer_id::text AS payer_id, payer.display_name AS payer_name,
-            p.payee_id::text AS payee_id, payee.display_name AS payee_name,
-            p.amount_minor::text AS amount_minor, btrim(p.currency) AS currency,
-            to_char(p.paid_on, 'YYYY-MM-DD') AS paid_on, p.paypal_ref
-     FROM payments p
-     JOIN users payer ON payer.id = p.payer_id
-     JOIN users payee ON payee.id = p.payee_id
-     WHERE p.group_id = $1::uuid
-     ORDER BY p.paid_on DESC, p.created_at DESC, p.id`,
-    [groupId],
-  )
-  return result.rows.map((row) => ({
-    id: textFrom(row.id, 'payment'),
-    payerId: textFrom(row.payer_id, 'payer'),
-    payerName: textFrom(row.payer_name, 'payer name'),
-    payeeId: textFrom(row.payee_id, 'payee'),
-    payeeName: textFrom(row.payee_name, 'payee name'),
-    amountMinor: minorFrom(row.amount_minor),
-    currency: textFrom(row.currency, 'currency') as CurrencyCode,
-    paidOn: dateFrom(row.paid_on),
-    paypalRef: row.paypal_ref === null ? null : textFrom(row.paypal_ref, 'paypal ref'),
-  }))
+  const rows = await readPayments(db, groupId)
+  const users = await readUsers(db, rows.flatMap((row) => [row.payerId, row.payeeId]))
+  return rows
+    .sort(
+      (a, b) =>
+        compare(b.paidOn, a.paidOn) || b.createdAt.toMillis() - a.createdAt.toMillis() || compare(a.id, b.id),
+    )
+    .flatMap((row): Payment[] => {
+      const payer = users.get(row.payerId)
+      const payee = users.get(row.payeeId)
+      if (!payer || !payee) return []
+      return [
+        {
+          id: row.id,
+          payerId: row.payerId,
+          payerName: payer.displayName,
+          payeeId: row.payeeId,
+          payeeName: payee.displayName,
+          amountMinor: row.amountMinor,
+          currency: row.currency as CurrencyCode,
+          paidOn: dateFrom(row.paidOn),
+          paypalRef: row.paypalRef,
+        },
+      ]
+    })
 }
 
 // Nets are recomputed from check-ins, membership dates, and payments on every read. Nothing is cached.
 // The calendar rows come from every membership, so a member who left keeps their row and their debts.
 export async function readLedger(db: Database, groupId: GroupId, today: IsoDate): Promise<Ledger | null> {
-  const terms = await loadActiveTerms(db, groupId, false)
-  if (!terms) return null
-  const members = await loadMembers(db, groupId)
-  const payments = await loadPayments(db, groupId)
+  const group = await readGroup(db, groupId)
+  const terms = group ? activeTerms(group) : null
+  if (!group || !terms) return null
+  const [members, payments] = await Promise.all([loadMembers(db, groupId, group), loadPayments(db, groupId)])
   const window = { phase: 'active', startsOn: terms.startsOn, endsOn: terms.endsOn } as const
   const calendar = buildCalendar({ window, today }, members)
   const debts = calendarDebts(calendar, terms.stakeMinor, members)
@@ -346,33 +321,29 @@ export async function recordPayment(
   const ref = parsePaypalRef(input.paypalRef)
   if (!ref.ok) return { ok: false, failure: 'ref_too_long' }
   try {
-    return await db.transaction(async (tx) => {
-      const group = await tx.query(`SELECT 1 AS ok FROM groups WHERE id = $1::uuid`, [groupId])
-      if (!group.rows[0]) throw new PaymentRejected('group_missing')
-      const payer = await tx.query(
-        `SELECT 1 AS ok FROM active_memberships WHERE group_id = $1::uuid AND user_id = $2::uuid`,
-        [groupId, account.id],
-      )
-      if (!payer.rows[0]) throw new PaymentRejected('not_member')
-      const terms = await loadActiveTerms(tx, groupId, true)
+    await db.runTransaction(async (tx) => {
+      const group = await readGroup(db, groupId, tx)
+      if (!group) throw new PaymentRejected('group_missing')
+      if (memberOf(group, account.id)?.leftOn !== null) throw new PaymentRejected('not_member')
+      const terms = activeTerms(group)
       if (!terms) throw new PaymentRejected('not_active')
-      const payee = await tx.query(
-        `SELECT 1 AS ok FROM memberships
-         WHERE group_id = $1::uuid AND user_id::text = $2 AND user_id <> $3::uuid`,
-        [groupId, input.payeeId, account.id],
-      )
-      if (!payee.rows[0]) throw new PaymentRejected('bad_payee')
+      if (input.payeeId === account.id || !memberOf(group, input.payeeId)) throw new PaymentRejected('bad_payee')
       const amount = parseMinorAmount(input.amount, terms.minorDigits, PAYMENT_MINOR_MAX)
       if (!amount.ok) {
         throw new PaymentRejected(amount.failure === 'too_large' ? 'amount_too_large' : 'amount_not_positive')
       }
-      await tx.query(
-        `INSERT INTO payments (id, group_id, payer_id, payee_id, amount_minor, currency, paid_on, paypal_ref)
-         VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::bigint, $6, $7::date, $8)`,
-        [crypto.randomUUID(), groupId, account.id, input.payeeId, String(amount.minor), terms.currency, paidOn, ref.ref],
-      )
-      return { ok: true }
+      const payment: PaymentDoc = {
+        payerId: account.id,
+        payeeId: input.payeeId,
+        amountMinor: amount.minor,
+        currency: terms.currency,
+        paidOn,
+        paypalRef: ref.ref,
+        createdAt: Timestamp.now(),
+      }
+      tx.create(paymentRef(db, groupId, crypto.randomUUID()), payment)
     })
+    return { ok: true }
   } catch (error) {
     if (error instanceof PaymentRejected) return { ok: false, failure: error.failure }
     throw error

@@ -1,18 +1,15 @@
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
-import type { AddressInfo } from 'node:net'
 import { test } from 'node:test'
-import type { PGlite } from '@electric-sql/pglite'
-import { upsertAccount } from '../src/accounts.ts'
-import { createApp } from '../src/app.ts'
 import { missedDayDebts, readLedger, recordPayment, settle, type Ledger } from '../src/balances.ts'
 import type { CalendarMember } from '../src/calendar.ts'
 import { parseIsoDate, saveChallenge, saveRhythm, startChallenge, type IsoDate } from '../src/challenge.ts'
 import { logCheckIn } from '../src/checkins.ts'
-import { openDatabase } from '../src/db.ts'
-import { createGroup, joinGroup, type GroupId } from '../src/groups.ts'
+import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
+import { recordDropout } from '../src/dropouts.ts'
+import type { GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
-import { createSession } from '../src/sessions.ts'
+import { readPayments } from '../src/store.ts'
+import { closeServer, cookieFor, groupWith, listen, person, setJoinedOn } from './support/fixtures.ts'
 
 function iso(raw: string): IsoDate {
   const day = parseIsoDate(raw)
@@ -96,33 +93,15 @@ test('the open amount nets both directions, then subtracts payments from debtor 
   assert.equal(total(overpaid), 0)
 })
 
-async function person(db: PGlite, name: string): Promise<Account> {
-  const saved = await upsertAccount(db, {
-    sub: `sub-${name}`,
-    email: `${name.toLowerCase()}@example.com`,
-    emailVerified: true,
-    displayName: name,
-    avatarUrl: null,
-  })
-  if (!saved.ok) throw new Error('account')
-  return saved.account
-}
-
-type Crew = { db: PGlite; ada: Account; grace: Account; lin: Account; groupId: GroupId }
+type Crew = { db: Database; ada: Account; grace: Account; lin: Account; groupId: GroupId }
 
 async function crew(options: { start?: boolean } = {}): Promise<Crew> {
-  const db = await openDatabase()
+  const db = openTestDatabase()
   const ada = await person(db, 'Ada')
   const grace = await person(db, 'Grace')
   const lin = await person(db, 'Lin')
-  const created = await createGroup(db, ada, 'Morning run')
-  if (!created.ok) throw new Error(created.failure)
-  const groupId = created.groupId
-  for (const who of [grace, lin]) {
-    const joined = await joinGroup(db, who, groupId)
-    if (!joined.ok) throw new Error(joined.failure)
-  }
-  await db.query(`UPDATE memberships SET joined_on = '2026-11-01' WHERE group_id = $1`, [groupId])
+  const groupId = await groupWith(db, [ada, grace, lin])
+  await setJoinedOn(db, groupId, '2026-11-01')
   const saved = await saveChallenge(db, ada, groupId, {
     name: 'No sweets',
     type: 'no_sugar',
@@ -148,7 +127,7 @@ async function crew(options: { start?: boolean } = {}): Promise<Crew> {
   return { db, ada, grace, lin, groupId }
 }
 
-async function ledger(db: PGlite, groupId: GroupId, today: string): Promise<Ledger> {
+async function ledger(db: Database, groupId: GroupId, today: string): Promise<Ledger> {
   const read = await readLedger(db, groupId, iso(today))
   if (!read) throw new Error('ledger')
   return read
@@ -189,7 +168,7 @@ test('nets follow check-ins and payments with nothing stored between reads', asy
       [['Lin', 'Ada', 1500, 'USD', '2026-11-04', '9XY12345AB6789012']],
     )
   } finally {
-    await db.close()
+    await closeDatabase(db)
   }
 })
 
@@ -210,12 +189,13 @@ test('a payment needs another member, a real past date, an amount in the currenc
     assert.deepEqual(await pay(ada, { paypalRef: 'x'.repeat(65) }), { ok: false, failure: 'ref_too_long' })
     assert.deepEqual(await pay(await person(db, 'Noor'), {}), { ok: false, failure: 'not_member' })
     assert.deepEqual(await pay(ada, { amount: '0.01' }), { ok: true })
-    const stored = await db.query<{ amount_minor: string; currency: string; paypal_ref: string | null }>(
-      `SELECT amount_minor::text AS amount_minor, btrim(currency) AS currency, paypal_ref FROM payments`,
+    const stored = await readPayments(db, groupId)
+    assert.deepEqual(
+      stored.map((row) => ({ amountMinor: row.amountMinor, currency: row.currency, paypalRef: row.paypalRef })),
+      [{ amountMinor: 1, currency: 'USD', paypalRef: null }],
     )
-    assert.deepEqual(stored.rows, [{ amount_minor: '1', currency: 'USD', paypal_ref: null }])
   } finally {
-    await db.close()
+    await closeDatabase(db)
   }
   const draft = await crew({ start: false })
   try {
@@ -229,45 +209,34 @@ test('a payment needs another member, a real past date, an amount in the currenc
     assert.deepEqual(result, { ok: false, failure: 'not_active' })
     assert.equal(await readLedger(draft.db, draft.groupId, today), null)
   } finally {
-    await draft.db.close()
+    await closeDatabase(draft.db)
   }
 })
 
-test('the database rejects a payment in another currency or to yourself', async () => {
-  const { db, ada, grace, groupId } = await crew()
+test('a payment is always in the challenge currency and can go to a member who left', async () => {
+  const { db, ada, grace, lin, groupId } = await crew()
+  const today = iso('2026-11-04')
   try {
-    await assert.rejects(
-      db.query(
-        `INSERT INTO payments (id, group_id, payer_id, payee_id, amount_minor, currency, paid_on)
-         VALUES (gen_random_uuid(), $1, $2, $3, 100, 'EUR', '2026-11-04')`,
-        [groupId, ada.id, grace.id],
-      ),
-    )
-    await assert.rejects(
-      db.query(
-        `INSERT INTO payments (id, group_id, payer_id, payee_id, amount_minor, currency, paid_on)
-         VALUES (gen_random_uuid(), $1, $2, $2, 100, 'USD', '2026-11-04')`,
-        [groupId, ada.id],
-      ),
+    assert.deepEqual(await recordDropout(db, lin, groupId, { memberId: lin.id, lastDay: '2026-11-02' }, today), { ok: true })
+    const pay = (who: Account, payeeId: string) =>
+      recordPayment(db, who, groupId, { payeeId, amount: '2.50', paidOn: '2026-11-04', paypalRef: '' }, today)
+    assert.deepEqual(await pay(ada, lin.id), { ok: true })
+    assert.deepEqual(await pay(lin, ada.id), { ok: false, failure: 'not_member' })
+    assert.deepEqual(await pay(grace, grace.id), { ok: false, failure: 'bad_payee' })
+    const stored = await readPayments(db, groupId)
+    assert.deepEqual(
+      stored.map((row) => [row.payerId, row.payeeId, row.amountMinor, row.currency]),
+      [[ada.id, lin.id, 250, 'USD']],
     )
   } finally {
-    await db.close()
+    await closeDatabase(db)
   }
 })
 
 test('the group card shows each net and who owes whom, and a recorded payment changes them', async () => {
   const { db, ada, grace, lin, groupId } = await crew()
-  const linCookie = `session=${encodeURIComponent(await createSession(db, lin.id))}`
-  const app = createApp({
-    db,
-    config: { clientId: 'client-id', clientSecret: 'client-secret' },
-    today: () => iso('2026-11-04'),
-  })
-  const server = createServer((req, res) => {
-    void app(req, res)
-  })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  const linCookie = await cookieFor(db, lin)
+  const { server, base } = await listen(db, () => iso('2026-11-04'))
   const groupPath = `/groups/${groupId}`
   const page = async () => (await fetch(`${base}${groupPath}`, { headers: { cookie: linCookie } })).text()
   const pay = (fields: Record<string, string>) =>
@@ -311,7 +280,7 @@ test('the group card shows each net and who owes whom, and a recorded payment ch
     assert.equal(signedOut.status, 401)
     assert.equal((await fetch(`${base}${groupPath}/payment`, { headers: { cookie: linCookie } })).status, 405)
   } finally {
-    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
-    await db.close()
+    await closeServer(server)
+    await closeDatabase(db)
   }
 })

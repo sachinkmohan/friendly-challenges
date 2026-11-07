@@ -1,58 +1,41 @@
-import { readdirSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { PGlite, type Transaction } from '@electric-sql/pglite'
-import { openPostgres, type Database } from './hosted-db.ts'
+import { cert, deleteApp, initializeApp, type App, type AppOptions } from 'firebase-admin/app'
+import { getFirestore, type Firestore } from 'firebase-admin/firestore'
 
-const dbDir = join(dirname(fileURLToPath(import.meta.url)), '../db')
+export type Database = Firestore
 
-export type { Database }
+const DEMO_PROJECT = 'demo-friendly-challenges'
+const apps = new WeakMap<Firestore, App>()
 
-function schemaNames(): string[] {
-  return readdirSync(dbDir)
-    .filter((name) => name.endsWith('.sql') && name !== 'sample.sql')
-    .sort()
-}
-
-async function applySchema(db: Database): Promise<void> {
-  for (const name of schemaNames()) {
-    await db.exec(readFileSync(join(dbDir, name), 'utf8'))
+function appOptions(projectId: string | undefined): AppOptions {
+  if (process.env.FIRESTORE_EMULATOR_HOST?.trim()) {
+    return { projectId: projectId ?? process.env.FIREBASE_PROJECT_ID?.trim() ?? DEMO_PROJECT }
   }
-}
-
-export async function loadSample(db: Database): Promise<void> {
-  await db.exec(readFileSync(join(dbDir, 'sample.sql'), 'utf8'))
-}
-
-export async function openDatabase(dataDir?: string): Promise<Database> {
-  const databaseUrl = process.env.DATABASE_URL?.trim() ?? ''
-  if (databaseUrl !== '') return openPostgres(databaseUrl)
-  const db = dataDir ? new PGlite(dataDir) : new PGlite()
-  await db.waitReady
-  const wrapped = fromPglite(db)
-  await applySchema(wrapped)
-  return wrapped
-}
-
-function fromPglite(db: PGlite): Database {
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT?.trim() ?? ''
+  if (raw === '') throw new Error('Firestore is not configured. Set FIREBASE_SERVICE_ACCOUNT or FIRESTORE_EMULATOR_HOST.')
+  const account = JSON.parse(raw) as { project_id?: unknown; client_email?: unknown; private_key?: unknown }
+  if (typeof account.project_id !== 'string' || typeof account.client_email !== 'string' || typeof account.private_key !== 'string') {
+    throw new Error('FIREBASE_SERVICE_ACCOUNT is not a service account key.')
+  }
   return {
-    query: (text, params) => db.query(text, params),
-    exec: async (text) => {
-      await db.exec(text)
-    },
-    transaction: (fn) => db.transaction((tx) => fn(fromTransaction(tx))),
-    close: () => db.close(),
+    projectId: account.project_id,
+    credential: cert({ projectId: account.project_id, clientEmail: account.client_email, privateKey: account.private_key }),
   }
 }
 
-function fromTransaction(tx: Transaction): Database {
-  const database: Database = {
-    query: (text, params) => tx.query(text, params),
-    exec: async (text) => {
-      await tx.exec(text)
-    },
-    transaction: (fn) => fn(database),
-    close: async () => {},
-  }
-  return database
+// Each call gets its own app, so a test can open an empty emulator project of its own.
+export function openDatabase(projectId?: string): Database {
+  const app = initializeApp(appOptions(projectId), `db-${crypto.randomUUID()}`)
+  const db = getFirestore(app)
+  apps.set(db, app)
+  return db
+}
+
+export function openTestDatabase(): Database {
+  return openDatabase(`demo-test-${crypto.randomUUID()}`)
+}
+
+export async function closeDatabase(db: Database): Promise<void> {
+  const app = apps.get(db)
+  await db.terminate()
+  if (app) await deleteApp(app)
 }

@@ -1,17 +1,12 @@
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
-import type { AddressInfo } from 'node:net'
 import { test } from 'node:test'
-import type { PGlite } from '@electric-sql/pglite'
-import { upsertAccount } from '../src/accounts.ts'
-import { createApp } from '../src/app.ts'
 import { buildCalendar, listHeatmaps, weeksOf, type CalendarMember, type DayMark } from '../src/calendar.ts'
 import { parseIsoDate, saveChallenge, saveRhythm, startChallenge, type IsoDate } from '../src/challenge.ts'
 import { logCheckIn } from '../src/checkins.ts'
-import { openDatabase } from '../src/db.ts'
-import { createGroup, joinGroup, type GroupId } from '../src/groups.ts'
+import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
+import type { GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
-import { createSession } from '../src/sessions.ts'
+import { closeServer, cookieFor, groupWith, listen, person, setJoinedOn } from './support/fixtures.ts'
 
 function iso(raw: string): IsoDate {
   const day = parseIsoDate(raw)
@@ -92,33 +87,15 @@ test('the heatmap puts weeks in columns and weekdays in rows', () => {
   )
 })
 
-async function person(db: PGlite, name: string): Promise<Account> {
-  const saved = await upsertAccount(db, {
-    sub: `sub-${name}`,
-    email: `${name.toLowerCase()}@example.com`,
-    emailVerified: true,
-    displayName: name,
-    avatarUrl: null,
-  })
-  if (!saved.ok) throw new Error('account')
-  return saved.account
-}
-
-type Crew = { db: PGlite; ada: Account; grace: Account; lin: Account; groupId: GroupId }
+type Crew = { db: Database; ada: Account; grace: Account; lin: Account; groupId: GroupId }
 
 async function activeCrew(): Promise<Crew> {
-  const db = await openDatabase()
+  const db = openTestDatabase()
   const ada = await person(db, 'Ada')
   const grace = await person(db, 'Grace')
   const lin = await person(db, 'Lin')
-  const created = await createGroup(db, ada, 'Morning run')
-  if (!created.ok) throw new Error(created.failure)
-  const groupId = created.groupId
-  for (const who of [grace, lin]) {
-    const joined = await joinGroup(db, who, groupId)
-    if (!joined.ok) throw new Error(joined.failure)
-  }
-  await db.query(`UPDATE memberships SET joined_on = '2026-11-01' WHERE group_id = $1`, [groupId])
+  const groupId = await groupWith(db, [ada, grace, lin])
+  await setJoinedOn(db, groupId, '2026-11-01')
   const saved = await saveChallenge(db, ada, groupId, {
     name: 'No sweets',
     type: 'no_sugar',
@@ -156,7 +133,7 @@ test('the home heatmap reads only the signed-in member days in active challenges
     )
     assert.deepEqual(await listHeatmaps(db, await person(db, 'Noor'), iso('2026-11-03')), [])
   } finally {
-    await db.close()
+    await closeDatabase(db)
   }
 })
 
@@ -183,17 +160,8 @@ function heatmapMarks(html: string): Record<string, string> {
 
 test('replacing a check-in updates the group calendar and the home heatmap', async () => {
   const { db, ada, grace, groupId } = await activeCrew()
-  const adaCookie = `session=${encodeURIComponent(await createSession(db, ada.id))}`
-  const app = createApp({
-    db,
-    config: { clientId: 'client-id', clientSecret: 'client-secret' },
-    today: () => iso('2026-11-04'),
-  })
-  const server = createServer((req, res) => {
-    void app(req, res)
-  })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  const adaCookie = await cookieFor(db, ada)
+  const { server, base } = await listen(db, () => iso('2026-11-04'))
   const groupPath = `/groups/${groupId}`
   const page = async (path: string) => (await fetch(`${base}${path}`, { headers: { cookie: adaCookie } })).text()
   const log = (day: string, color: string) =>
@@ -232,7 +200,7 @@ test('replacing a check-in updates the group calendar and the home heatmap', asy
     assert.equal(rowMarks(await page(groupPath), `data-member="${ada.id}"`)['2026-11-03'], 'red')
     assert.equal(heatmapMarks(await page('/'))['2026-11-03@2'], 'red')
   } finally {
-    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
-    await db.close()
+    await closeServer(server)
+    await closeDatabase(db)
   }
 })

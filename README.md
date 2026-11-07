@@ -4,19 +4,31 @@ Friends share a habit challenge. This app signs a person in with Google and stor
 
 ## Run
 
-Copy `.env.example` to `.env` and fill in the Google OAuth client. `npm start` reads `.env` when that file is present. In the Google client, register this redirect URI.
+The app stores its data in Cloud Firestore. Local runs use the Firestore emulator, which needs Java 11 or later. Run `npm install` first.
+
+Copy `.env.example` to `.env` and fill in the Google OAuth client. The app reads `.env` when that file is present. In the Google client, register this redirect URI.
 
 `http://127.0.0.1:3000/auth/google/callback`
 
-Then start the app.
+Then start the app on the emulator.
 
 ```bash
-npm start
+npm run dev
 ```
 
-Open `http://127.0.0.1:3000`. Sign in with Google. The page shows your name, email, and avatar. Sign out. The account row stays. The session does not.
+Open `http://127.0.0.1:3000`. Sign in with Google. The page shows your name, email, and avatar. Sign out. The account stays. The session does not.
 
-Signing in again with the same Google account updates that row. It does not create a second user.
+Signing in again with the same Google account updates that account. It does not create a second user.
+
+The emulator starts empty each time, then loads the sample group.
+
+## Host
+
+On the host, `npm start` talks to a real Firestore database. Create a Firebase project with Firestore, create a service account key, and put the whole key JSON in `FIREBASE_SERVICE_ACCOUNT`. `npm run build` loads the sample group into that database. Deploy `firestore.rules` with `firebase deploy --only firestore:rules` so no browser client can read or write. Only the server talks to Firestore.
+
+## Netlify
+
+`netlify.toml` sends every path to the function in `netlify/functions/app.ts`, which runs the same app. Set `FIREBASE_SERVICE_ACCOUNT`, `GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET` in the site's environment variables, scoped to Functions and Builds. In the Google client, register `https://<site>.netlify.app/auth/google/callback`.
 
 ## Groups
 
@@ -56,7 +68,7 @@ After a dropout the group can have fewer than 3 active members. The leaver no lo
 
 ## Sample
 
-A new database loads one group named Pantry. Ada, Bea, and Cam share a no-sugar challenge. They log on different intervals. The days include green and red check-ins, and Ada has recorded one payment to Cam. The comment at the top of `db/sample.sql` states the open debt in minor units. The balance on that group matches the comment.
+A new database loads one group named Pantry. Ada, Bea, and Cam share a no-sugar challenge. They log on different intervals. The days include green and red check-ins, and Ada has recorded one payment to Cam. `SAMPLE_OPEN_DEBT_MINOR` in `src/sample.ts` states the open debt in minor units. The balance on that group matches that number. Loading the sample again writes only the documents that are missing.
 
 ## Check
 
@@ -64,4 +76,4 @@ A new database loads one group named Pantry. Ada, Bea, and Cam share a no-sugar 
 npm test
 ```
 
-The tests stand in for Google's token and userinfo endpoints. They check the redirect to Google, the account fields from `sub`, a second sign-in for the same `sub`, and sign-out.
+The tests run on the Firestore emulator, and each test opens an empty project of its own. They stand in for Google's token and userinfo endpoints. They check the redirect to Google, the account fields from `sub`, a second sign-in for the same `sub`, and sign-out.
