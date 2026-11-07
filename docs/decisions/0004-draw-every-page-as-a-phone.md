@@ -1,6 +1,6 @@
 # 0004: We will draw every page as a phone
 
-- **Status:** accepted
+- **Status:** amended by [0008](0008-fill-the-screen-on-a-phone.md)
 - **Date:** 2026-11-06
 
 ## Context
