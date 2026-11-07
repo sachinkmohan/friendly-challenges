@@ -663,7 +663,7 @@ function typeLabel(type: ChallengeType): string {
 }
 
 function headcountSentence(floor: number, cap: number): string {
-  return `A challenge can start when ${floor} to ${cap} people are active.`
+  return `A challenge can start when ${floor} to ${cap} people are active. Logging opens once someone presses Start challenge.`
 }
 
 function failureParagraph(attempt?: ChallengeAttempt): string {
