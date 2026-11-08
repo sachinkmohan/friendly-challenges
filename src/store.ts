@@ -74,7 +74,6 @@ export type PaymentDoc = {
 export type PaymentRow = PaymentDoc & { readonly id: string }
 
 export const ACTIVE_MEMBER_CAP = 5
-export const CHALLENGE_MEMBER_FLOOR = 3
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/
 

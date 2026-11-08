@@ -15,6 +15,8 @@ import {
   type Rhythm,
   type RhythmInput,
   type RhythmLine,
+  type StakesGo,
+  type StartKind,
 } from './challenge.ts'
 import { DAY_MARK_LABELS, type GroupCalendar, type Heatmap, type MarkedDay } from './calendar.ts'
 import { dropoutFailureCopy, type DropoutFailure, type DropoutInput } from './dropouts.ts'
@@ -670,6 +672,7 @@ export type ChallengeAttempt = {
   dropoutDraft?: DropoutInput
   draft?: ChallengeInput
   rhythmDraft?: RhythmInput
+  causeDraft?: string
   checkInDay?: string
 }
 
@@ -687,8 +690,8 @@ function typeLabel(type: ChallengeType): string {
   return type.kind === 'custom' ? type.label : PRESET_LABELS[type.preset]
 }
 
-function headcountSentence(floor: number, cap: number): string {
-  return `A challenge can start when ${floor} to ${cap} people are active.`
+function headcountSentence(cap: number): string {
+  return `A challenge can start when 1 to ${cap} people are active.`
 }
 
 function failureParagraph(attempt?: ChallengeAttempt): string {
@@ -754,13 +757,19 @@ function termsFromDraft(draft: ChallengeInput): TermValues {
   }
 }
 
-function termsText(terms: ChallengeTerms, minorDigits: number): string {
+function stakesGoText(stakesGo: StakesGo | null): string {
+  if (stakesGo?.kind !== 'cause') return ''
+  return `<p>Missed days are owed to ${escapeHtml(stakesGo.name)}.</p>`
+}
+
+function termsText(terms: ChallengeTerms, minorDigits: number, stakesGo: StakesGo | null): string {
   const start = escapeHtml(terms.startsOn)
   const end = escapeHtml(terms.endsOn)
   return `<p>${escapeHtml(terms.name)}</p>
     <p>${escapeHtml(typeLabel(terms.type))}</p>
     <p><time datetime="${start}">${start}</time> to <time datetime="${end}">${end}</time></p>
-    <p>${escapeHtml(formatStake(terms.stakeMinor, minorDigits))} ${escapeHtml(terms.currency)}</p>`
+    <p>${escapeHtml(formatStake(terms.stakeMinor, minorDigits))} ${escapeHtml(terms.currency)}</p>
+    ${stakesGoText(stakesGo)}`
 }
 
 function termsForm(groupId: GroupId, currencies: readonly string[], values: TermValues): string {
@@ -938,10 +947,16 @@ function dropoutForm(
     </form>`
 }
 
-function startForm(groupId: GroupId, activeCount: number, floor: number, cap: number): string {
-  if (activeCount < floor || activeCount > cap) return ''
-  const action = escapeHtml(`${groupHref(groupId)}/challenge/start`)
-  return `<form method="post" action="${action}"><button type="submit">Start challenge</button></form>`
+function startForm(groupId: GroupId, start: StartKind, cause: string | undefined): string {
+  if (start === 'over_cap') return ''
+  const action = escapeHtml(`${groupHref(groupId)}${challengeStartSuffix}`)
+  if (start === 'group') return `<form method="post" action="${action}"><button type="submit">Start challenge</button></form>`
+  return `<form method="post" action="${action}">
+      <p class="field-hint">Invite friends with the link, or start on your own.</p>
+      <label for="start-cause">Who your missed days are owed to</label>
+      <input id="start-cause" name="cause" value="${escapeHtml(cause ?? '')}" autocomplete="off">
+      <button type="submit">Start challenge</button>
+    </form>`
 }
 
 function memberItem(member: MemberLine, rhythms: readonly RhythmLine[]): string {
@@ -962,7 +977,7 @@ function joinControl(groupId: GroupId, viewer: Viewer): string {
 
 function headlineText(headline: ChallengeHeadline | null): string {
   if (!headline) return ''
-  return termsText(headline.terms, headline.minorDigits)
+  return termsText(headline.terms, headline.minorDigits, headline.stakesGo)
 }
 
 export function renderGroup(
@@ -988,10 +1003,10 @@ export function renderGroup(
   }
   const challenge = view.challenge
   const range =
-    challenge.phase === 'active' ? '' : `<p>${escapeHtml(headcountSentence(challenge.floor, challenge.cap))}</p>`
+    challenge.phase === 'active' ? '' : `<p>${escapeHtml(headcountSentence(challenge.cap))}</p>`
   const terms =
     challenge.phase === 'active'
-      ? termsText(challenge.terms, challenge.minorDigits)
+      ? termsText(challenge.terms, challenge.minorDigits, challenge.stakesGo)
       : termsForm(
           view.groupId,
           challenge.currencies,
@@ -1001,8 +1016,7 @@ export function renderGroup(
               ? termsFromStored(challenge.terms, challenge.minorDigits)
               : emptyTerms,
         )
-  const start =
-    challenge.phase === 'draft' ? startForm(view.groupId, view.activeCount, challenge.floor, challenge.cap) : ''
+  const start = challenge.phase === 'draft' ? startForm(view.groupId, challenge.start, attempt?.causeDraft) : ''
   const userId = viewer.state === 'signed_in' ? viewer.account.id : ''
   const rhythm = rhythmControl(view.groupId, challenge, userId, attempt?.rhythmDraft)
   const checkIn = checkInControl(view.groupId, challenge, userId, attempt?.checkInDay)

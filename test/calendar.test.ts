@@ -114,7 +114,7 @@ async function activeCrew(): Promise<Crew> {
     const rhythm = await saveRhythm(db, who, groupId, { interval, anchorOn })
     if (!rhythm.ok) throw new Error(rhythm.failure)
   }
-  const started = await startChallenge(db, ada, groupId)
+  const started = await startChallenge(db, ada, groupId, { cause: '' })
   if (!started.ok) throw new Error(started.failure)
   return { db, ada, grace, lin, groupId }
 }

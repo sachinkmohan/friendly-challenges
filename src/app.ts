@@ -12,6 +12,7 @@ import {
   type ChallengeFailure,
   type ChallengeInput,
   type RhythmInput,
+  type StartInput,
 } from './challenge.ts'
 import { listHeatmaps, utcToday } from './calendar.ts'
 import type { IsoDate } from './challenge.ts'
@@ -243,6 +244,7 @@ function challengeStatus(failure: ChallengeFailure): number {
     failure === 'frozen' ||
     failure === 'no_challenge' ||
     failure === 'outside_headcount' ||
+    failure === 'cause_for_group' ||
     failure === 'rhythm_past_end'
   ) {
     return 409
@@ -329,8 +331,7 @@ async function finishChallenge(
   account: Account,
   deps: AppDeps,
   result: { ok: true } | { ok: false; failure: ChallengeFailure },
-  draft?: ChallengeInput,
-  rhythmDraft?: RhythmInput,
+  drafts: Pick<ChallengeAttempt, 'draft' | 'rhythmDraft' | 'causeDraft'> = {},
 ): Promise<void> {
   if (result.ok) {
     sendRedirect(res, groupHref(groupId), [], 303)
@@ -342,7 +343,7 @@ async function finishChallenge(
   }
   const status = challengeStatus(result.failure)
   const attempt: ChallengeAttempt =
-    status === 409 ? { failure: result.failure } : { failure: result.failure, draft, rhythmDraft }
+    status === 409 ? { failure: result.failure } : { failure: result.failure, ...drafts }
   if (result.failure === 'not_member') {
     await sendGroupPage(res, status, account, groupId, origin, deps, attempt)
     return
@@ -365,14 +366,14 @@ async function postChallenge(
     await sendGroupPage(res, 401, null, route.groupId, origin, deps)
     return
   }
-  if (route.kind === 'start_challenge') {
-    req.resume()
-    const started = await startChallenge(deps.db, viewer.account, route.groupId)
-    await finishChallenge(res, origin, route.groupId, viewer.account, deps, started)
-    return
-  }
   const form = await readForm(req)
   if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
+  if (route.kind === 'start_challenge') {
+    const input: StartInput = { cause: form.get('cause') ?? '' }
+    const started = await startChallenge(deps.db, viewer.account, route.groupId, input)
+    await finishChallenge(res, origin, route.groupId, viewer.account, deps, started, { causeDraft: input.cause })
+    return
+  }
   if (route.kind === 'save_challenge') {
     const input: ChallengeInput = {
       name: form.get('name') ?? '',
@@ -384,7 +385,7 @@ async function postChallenge(
       endsOn: form.get('ends_on') ?? '',
     }
     const saved = await saveChallenge(deps.db, viewer.account, route.groupId, input)
-    await finishChallenge(res, origin, route.groupId, viewer.account, deps, saved, input)
+    await finishChallenge(res, origin, route.groupId, viewer.account, deps, saved, { draft: input })
     return
   }
   const rhythm: RhythmInput = {
@@ -392,7 +393,7 @@ async function postChallenge(
     anchorOn: form.get('anchor_on') ?? '',
   }
   const saved = await saveRhythm(deps.db, viewer.account, route.groupId, rhythm)
-  await finishChallenge(res, origin, route.groupId, viewer.account, deps, saved, undefined, rhythm)
+  await finishChallenge(res, origin, route.groupId, viewer.account, deps, saved, { rhythmDraft: rhythm })
 }
 
 async function postCheckIn(
