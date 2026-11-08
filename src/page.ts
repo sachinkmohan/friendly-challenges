@@ -227,6 +227,8 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
     .check-in-colors { display: flex; gap: 12px; }
     .check-in-colors button.green { background: #2f7d4a; }
     .check-in-colors button.red { background: #b3392f; }
+    .check-in-colors button:disabled { opacity: 0.45; cursor: progress; }
+    .check-in-colors button.is-saving { opacity: 1; }
     button.danger { background: #b3392f; }
     label.confirm { gap: 12px; font-weight: 400; }
     label.confirm input { width: 20px; min-height: 20px; margin: 0; flex: none; }
@@ -985,7 +987,7 @@ function checkInControl(
   const action = escapeHtml(`${groupHref(groupId)}${checkInSuffix}`)
   const start = escapeHtml(challenge.terms.startsOn)
   const end = escapeHtml(challenge.terms.endsOn)
-  return `<form method="post" action="${action}">
+  return `<form class="check-in" method="post" action="${action}">
       <label for="check-in-day">Day to log</label>
       <input id="check-in-day" name="day" type="date" min="${start}" max="${end}" value="${escapeHtml(postedDay ?? '')}" required>
       <div class="check-in-colors">
@@ -1002,6 +1004,36 @@ function checkInControl(
         var today = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate())
         if (today < input.max) input.max = today
         if (!input.value) input.value = today
+      })()
+      ;(function () {
+        var form = document.querySelector('form.check-in')
+        if (!form) return
+        var buttons = Array.prototype.slice.call(form.querySelectorAll('.check-in-colors button'))
+        var labels = buttons.map(function (button) { return button.textContent })
+        // A disabled button's value is left out of the post, so the tapped color rides in a hidden field.
+        var color = document.createElement('input')
+        color.type = 'hidden'
+        form.addEventListener('submit', function (event) {
+          var tapped = event.submitter
+          if (!tapped || buttons.indexOf(tapped) < 0) return
+          color.name = tapped.name
+          color.value = tapped.value
+          form.appendChild(color)
+          form.setAttribute('aria-busy', 'true')
+          buttons.forEach(function (button) { button.disabled = true })
+          tapped.classList.add('is-saving')
+          tapped.textContent = 'Saving…'
+        })
+        window.addEventListener('pageshow', function (event) {
+          if (!event.persisted) return
+          color.remove()
+          form.removeAttribute('aria-busy')
+          buttons.forEach(function (button, index) {
+            button.disabled = false
+            button.classList.remove('is-saving')
+            button.textContent = labels[index]
+          })
+        })
       })()
     </script>`
 }

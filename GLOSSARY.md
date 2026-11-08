@@ -39,3 +39,7 @@ _Avoid_: Interval, frequency, schedule, anchor
 **Due day**:
 A day a member's rhythm says they must log. Only a missed due day costs the stake.
 _Avoid_: Log day, check-in day
+
+**Check-in**:
+A member's record for one due day: kept (green) or missed (red). Logging a day again replaces its check-in. The action is "log a day".
+_Avoid_: Log entry, update
