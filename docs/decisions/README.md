@@ -11,3 +11,4 @@ These records follow the template at <https://kcd-slides-bwk-adrs-for-agents.pag
 - [0007 We will deploy on Netlify as one function](0007-deploy-on-netlify.md). Accepted.
 - [0008 We will fill the screen on a phone](0008-fill-the-screen-on-a-phone.md). Accepted.
 - [0009 We will allow solo challenges owed to a cause](0009-allow-solo-challenges-owed-to-a-cause.md). Accepted.
+- [0010 We will let only the creator set and start a challenge](0010-let-the-creator-run-the-challenge.md). Accepted.
