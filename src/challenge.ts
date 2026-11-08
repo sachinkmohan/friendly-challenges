@@ -278,7 +278,7 @@ export function isRhythmKind(value: string): value is RhythmKind {
   return Object.prototype.hasOwnProperty.call(RHYTHM_STEP, value)
 }
 
-function utcOrdinal(day: IsoDate): number {
+export function utcOrdinal(day: IsoDate): number {
   const year = Number(day.slice(0, 4))
   const month = Number(day.slice(5, 7))
   const date = Number(day.slice(8, 10))
@@ -622,17 +622,29 @@ export async function startChallenge(
     if (group.challenge?.phase === 'active') return null
     const unmet = startChecks(group).find((check) => !check.done)
     if (unmet) throw new CommandError(startStepFailure[unmet.step])
+    const fromStart = joinedFromStart(group)
     if (startKind(activeMemberIds(group).length) === 'group') {
       if (input.cause.trim() !== '') throw new CommandError('cause_for_group')
-      return { 'challenge.phase': 'active', 'challenge.cause': null }
+      return { ...fromStart, 'challenge.phase': 'active', 'challenge.cause': null }
     }
     const cause = parseCause(input.cause)
     if (!cause.ok) throw new CommandError(cause.failure)
-    return { 'challenge.phase': 'active', 'challenge.cause': cause.name }
+    return { ...fromStart, 'challenge.phase': 'active', 'challenge.cause': cause.name }
   })
   if (!changed.ok) return changed
   if (!changed.group.challenge) throw new Error('challenge')
   return { ok: true, name: changed.group.challenge.name }
+}
+
+// A member who is in the group when it starts is in the challenge from its start date, even a backdated one.
+function joinedFromStart(group: GroupDoc): { readonly [field: string]: string } {
+  const startsOn = group.challenge?.startsOn
+  if (!startsOn) return {}
+  return Object.fromEntries(
+    activeMemberIds(group)
+      .filter((userId) => group.members[userId]!.joinedOn > startsOn)
+      .map((userId) => [`members.${userId}.joinedOn`, startsOn]),
+  )
 }
 
 export async function saveRhythm(

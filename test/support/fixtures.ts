@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { FieldPath } from 'firebase-admin/firestore'
 import { upsertAccount } from '../../src/accounts.ts'
 import { createApp, type AppDeps } from '../../src/app.ts'
+import type { IsoDate } from '../../src/challenge.ts'
 import type { Database } from '../../src/db.ts'
 import { createGroup, joinGroup, type GroupId } from '../../src/groups.ts'
 import type { Account, FirebaseWebConfig, IdToken } from '../../src/identity.ts'
@@ -20,6 +21,9 @@ export async function person(db: Database, name: string): Promise<Account> {
   if (!saved.ok) throw new Error('account')
   return saved.account
 }
+
+// A day after every check-in the tests log, so none of them is in the future.
+export const CHECK_IN_TODAY = '2026-11-30' as IsoDate
 
 export async function groupWith(db: Database, people: readonly Account[], name = 'Morning run'): Promise<GroupId> {
   const created = await createGroup(db, people[0] as Account, name)

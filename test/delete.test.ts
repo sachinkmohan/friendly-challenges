@@ -7,7 +7,7 @@ import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
 import { deleteGroup, listHomeGroups, type GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
 import { groupRef, readGroup } from '../src/store.ts'
-import { closeServer, cookieFor, groupWith, listen, person, post, setJoinedOn, setLeftOn } from './support/fixtures.ts'
+import { CHECK_IN_TODAY, closeServer, cookieFor, groupWith, listen, person, post, setJoinedOn, setLeftOn } from './support/fixtures.ts'
 
 function iso(raw: string): IsoDate {
   const day = parseIsoDate(raw)
@@ -70,8 +70,8 @@ test('only the creator can delete the group, and only after confirming', async (
 test('deleting removes the group, its check-ins, and its payments for every member', async () => {
   const { db, ada, grace, lin, groupId } = await activeCrew()
   try {
-    assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-02', color: 'red' }), { ok: true, day: '2026-11-02', color: 'red', previous: null })
-    assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-02', color: 'green' }), { ok: true, day: '2026-11-02', color: 'green', previous: null })
+    assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-02', color: 'red' }, CHECK_IN_TODAY), { ok: true, day: '2026-11-02', color: 'red', previous: null })
+    assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-02', color: 'green' }, CHECK_IN_TODAY), { ok: true, day: '2026-11-02', color: 'green', previous: null })
     const paid = await recordPayment(db, grace, groupId, { payeeId: ada.id, amount: '5', paidOn: '2026-11-03', paypalRef: '' }, today)
     assert.deepEqual(paid, { ok: true, amountMinor: 500, currency: 'USD', minorDigits: 2, payeeName: 'Ada' })
     assert.equal(await childCount(db, groupId), 3)
@@ -81,7 +81,7 @@ test('deleting removes the group, its check-ins, and its payments for every memb
     assert.equal(await readGroup(db, groupId), null)
     assert.equal(await childCount(db, groupId), 0)
     for (const who of [ada, grace, lin]) assert.deepEqual(await listHomeGroups(db, who), [])
-    assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-03', color: 'green' }), {
+    assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-03', color: 'green' }, CHECK_IN_TODAY), {
       ok: false,
       failure: 'group_missing',
     })

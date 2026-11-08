@@ -8,7 +8,7 @@ import { recordDropout } from '../src/dropouts.ts'
 import { joinGroup, viewGroup, type GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
 import { readCheckIns, readGroup } from '../src/store.ts'
-import { closeServer, cookieFor, groupWith, listen, person, post, setJoinedOn } from './support/fixtures.ts'
+import { CHECK_IN_TODAY, closeServer, cookieFor, groupWith, listen, person, post, setJoinedOn } from './support/fixtures.ts'
 
 function iso(raw: string): IsoDate {
   const day = parseIsoDate(raw)
@@ -122,7 +122,7 @@ test('debts through the last day stay and later days owe the leaver nothing and 
   ]
   try {
     for (const [who, day, color] of days) {
-      assert.deepEqual(await logCheckIn(db, who, groupId, { day, color }), { ok: true, day, color, previous: null })
+      assert.deepEqual(await logCheckIn(db, who, groupId, { day, color }, CHECK_IN_TODAY), { ok: true, day, color, previous: null })
     }
     const before = await ledger(db, groupId)
     assert.deepEqual(netsOf(before), { [ada.id]: 500, [grace.id]: 2000, [lin.id]: -2500 })
@@ -144,7 +144,7 @@ test('debts through the last day stay and later days owe the leaver nothing and 
         [lin.id, grace.id, 1000],
       ],
     )
-    assert.deepEqual(await logCheckIn(db, lin, groupId, { day: '2026-11-04', color: 'green' }), {
+    assert.deepEqual(await logCheckIn(db, lin, groupId, { day: '2026-11-04', color: 'green' }, CHECK_IN_TODAY), {
       ok: false,
       failure: 'outside_membership',
     })
