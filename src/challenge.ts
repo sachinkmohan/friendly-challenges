@@ -116,11 +116,22 @@ export type ChallengeHeadline = {
 
 export type StartKind = 'solo' | 'group' | 'over_cap'
 
+export type StartStep = 'terms_saved' | 'anchors_in_range' | 'headcount'
+
+export type StartCheck = { readonly step: StartStep; readonly done: boolean }
+
+const startStepFailure = {
+  terms_saved: 'no_challenge',
+  anchors_in_range: 'rhythm_past_end',
+  headcount: 'outside_headcount',
+} as const satisfies Record<StartStep, ChallengeFailure>
+
 export type MemberChallengeCard =
   | {
       readonly phase: 'unopened'
       readonly cap: number
       readonly currencies: readonly CurrencyCode[]
+      readonly checks: readonly StartCheck[]
     }
   | {
       readonly phase: 'draft'
@@ -128,6 +139,7 @@ export type MemberChallengeCard =
       readonly minorDigits: number
       readonly cap: number
       readonly start: StartKind
+      readonly checks: readonly StartCheck[]
       readonly currencies: readonly CurrencyCode[]
       readonly rhythms: readonly RhythmLine[]
     }
@@ -489,6 +501,17 @@ function startKind(activeCount: number): StartKind {
   return 'over_cap'
 }
 
+// Listed in the order startChallenge reports them, so the first unmet step is the failure a press of Start gets.
+function startChecks(group: GroupDoc): readonly StartCheck[] {
+  const active = activeMemberIds(group)
+  const endsOn = group.challenge?.endsOn ?? ''
+  return [
+    { step: 'terms_saved', done: group.challenge !== null },
+    { step: 'anchors_in_range', done: active.every((userId) => (rhythmOf(group, userId)?.anchorOn ?? '') <= endsOn) },
+    { step: 'headcount', done: startKind(active.length) !== 'over_cap' },
+  ]
+}
+
 function draftDoc(terms: ChallengeTerms): ChallengeDoc {
   return {
     name: terms.name,
@@ -597,16 +620,10 @@ export async function startChallenge(
   input: StartInput,
 ): Promise<StartChallengeResult> {
   return changeGroup<StartChallengeResult>(db, account, groupId, (group) => {
-    if (!group.challenge) throw new CommandError('no_challenge')
-    if (group.challenge.phase === 'active') return null
-    const endsOn = group.challenge.endsOn
-    const active = activeMemberIds(group)
-    if (active.some((userId) => (rhythmOf(group, userId)?.anchorOn ?? '') > endsOn)) {
-      throw new CommandError('rhythm_past_end')
-    }
-    const start = startKind(active.length)
-    if (start === 'over_cap') throw new CommandError('outside_headcount')
-    if (start === 'group') {
+    if (group.challenge?.phase === 'active') return null
+    const unmet = startChecks(group).find((check) => !check.done)
+    if (unmet) throw new CommandError(startStepFailure[unmet.step])
+    if (startKind(activeMemberIds(group).length) === 'group') {
       if (input.cause.trim() !== '') throw new CommandError('cause_for_group')
       return { 'challenge.phase': 'active', 'challenge.cause': null }
     }
@@ -651,12 +668,13 @@ export async function readMemberChallenge(db: Database, account: Account, groupI
   if (!isActiveMember(group, account.id)) return { ok: false, failure: 'not_member' }
   const cap = ACTIVE_MEMBER_CAP
   const currencies = CURRENCY_CODES as readonly CurrencyCode[]
-  if (!group.challenge) return { ok: true, card: { phase: 'unopened', cap, currencies } }
+  const checks = startChecks(group)
+  if (!group.challenge) return { ok: true, card: { phase: 'unopened', cap, currencies, checks } }
   const stored = storedFrom(group.challenge)
   const rhythms = rhythmLines(group)
   if (stored.phase === 'draft') {
     const start = startKind(activeMemberIds(group).length)
-    return { ok: true, card: { phase: 'draft', terms: stored.terms, minorDigits: stored.minorDigits, cap, start, currencies, rhythms } }
+    return { ok: true, card: { phase: 'draft', terms: stored.terms, minorDigits: stored.minorDigits, cap, start, checks, currencies, rhythms } }
   }
   return {
     ok: true,

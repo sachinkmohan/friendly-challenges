@@ -332,6 +332,7 @@ async function finishChallenge(
   deps: AppDeps,
   result: { ok: true } | { ok: false; failure: ChallengeFailure },
   drafts: Pick<ChallengeAttempt, 'draft' | 'rhythmDraft' | 'causeDraft'> = {},
+  slot: 'failure' | 'startFailure' = 'failure',
 ): Promise<void> {
   if (result.ok) {
     sendRedirect(res, groupHref(groupId), [], 303)
@@ -342,8 +343,8 @@ async function finishChallenge(
     return
   }
   const status = challengeStatus(result.failure)
-  const attempt: ChallengeAttempt =
-    status === 409 ? { failure: result.failure } : { failure: result.failure, ...drafts }
+  const failure: ChallengeAttempt = { [slot]: result.failure }
+  const attempt: ChallengeAttempt = status === 409 ? failure : { ...failure, ...drafts }
   if (result.failure === 'not_member') {
     await sendGroupPage(res, status, account, groupId, origin, deps, attempt)
     return
@@ -371,7 +372,7 @@ async function postChallenge(
   if (route.kind === 'start_challenge') {
     const input: StartInput = { cause: form.get('cause') ?? '' }
     const started = await startChallenge(deps.db, viewer.account, route.groupId, input)
-    await finishChallenge(res, origin, route.groupId, viewer.account, deps, started, { causeDraft: input.cause })
+    await finishChallenge(res, origin, route.groupId, viewer.account, deps, started, { causeDraft: input.cause }, 'startFailure')
     return
   }
   if (route.kind === 'save_challenge') {
