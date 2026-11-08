@@ -23,6 +23,7 @@ export type TimingLine = {
   readonly dbMs: number
   readonly cpuMs: number
   readonly steps: readonly { readonly name: string; readonly startMs: number; readonly ms: number }[]
+  readonly rounds: number
   readonly rpcs: readonly {
     readonly name: string
     readonly step: string
@@ -70,10 +71,32 @@ function unionMs(intervals: readonly (readonly [number, number])[]): number {
   return total
 }
 
+// The longest chain of RPCs where each started after the one before it ended: the round trips a request waited on in a row.
+// Times are rounded to whole milliseconds, so a start up to 1 ms before the previous end still counts as after it.
+export function roundsOf(rpcs: readonly { readonly startMs: number; readonly ms: number | null }[]): number {
+  const sorted = [...rpcs].sort((a, b) => a.startMs - b.startMs)
+  const depths: number[] = []
+  for (const [i, rpc] of sorted.entries()) {
+    let depth = 1
+    for (const [j, before] of sorted.slice(0, i).entries()) {
+      if (before.ms !== null && rpc.startMs >= before.startMs + before.ms - 1) depth = Math.max(depth, depths[j]! + 1)
+    }
+    depths.push(depth)
+  }
+  return Math.max(0, ...depths)
+}
+
 function lineFor(req: IncomingMessage, res: ServerResponse, trace: Trace, at: string, number: number, idleMs: number | null, cpu: NodeJS.CpuUsage): TimingLine {
   const now = performance.now()
   const offset = (time: number) => Math.round(time - trace.start)
   const cpuUsed = process.cpuUsage(cpu)
+  const rpcs = trace.rpcs.map((rpc) => ({
+    name: rpc.name,
+    step: rpc.step,
+    startMs: offset(rpc.start),
+    ms: rpc.end === null ? null : Math.round(rpc.end - rpc.start),
+    tx: rpc.tx,
+  }))
   return {
     event: 'request_timing',
     at,
@@ -93,13 +116,8 @@ function lineFor(req: IncomingMessage, res: ServerResponse, trace: Trace, at: st
     dbMs: Math.round(unionMs(trace.rpcs.map((rpc) => [rpc.start, rpc.end ?? now]))),
     cpuMs: Math.round((cpuUsed.user + cpuUsed.system) / 1000),
     steps: trace.steps.map((step) => ({ name: step.name, startMs: offset(step.start), ms: Math.round(step.end - step.start) })),
-    rpcs: trace.rpcs.map((rpc) => ({
-      name: rpc.name,
-      step: rpc.step,
-      startMs: offset(rpc.start),
-      ms: rpc.end === null ? null : Math.round(rpc.end - rpc.start),
-      tx: rpc.tx,
-    })),
+    rounds: roundsOf(rpcs),
+    rpcs,
   }
 }
 
