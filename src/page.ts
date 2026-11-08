@@ -526,7 +526,7 @@ function openInBrowserHelp(link: URL, os: Os): string {
 
 function inAppCard(link: URL, browser: Browser): string {
   return `<div class="in-app"${browser.inApp ? '' : ' hidden'}>
-        <p><strong>Open this link in your browser to sign in.</strong> Google does not allow sign-in inside other apps.</p>
+        <p><strong>Google sign-in does not work here.</strong> Open this link in your browser to sign in.</p>
         <input class="in-app-link" type="text" readonly value="${escapeHtml(link.href)}" aria-label="Link to this page">
         <button type="button" class="copy-link">Copy link</button>
         ${openInBrowserHelp(link, browser.os)}
