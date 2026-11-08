@@ -37,7 +37,7 @@ type TermsFields = {
 
 export type ChallengeDoc =
   | (TermsFields & { readonly phase: 'draft' })
-  | (TermsFields & { readonly phase: 'active'; readonly cause: string | null })
+  | (TermsFields & { readonly phase: 'active'; readonly cause: string | null; readonly joinsFromStart: boolean })
 
 export type RhythmDoc = {
   readonly kind: string
@@ -119,7 +119,20 @@ function parseChallenge(raw: unknown): ChallengeDoc {
   }
   const cause = nullable(row.cause, (v) => text(v, 'challenge cause'))
   if (row.phase === 'draft') return cause === null ? { ...terms, phase: 'draft' } : fail('challenge cause')
-  return { ...terms, phase: 'active', cause }
+  return { ...terms, phase: 'active', cause, joinsFromStart: row.joinsFromStart === true }
+}
+
+// Challenges started before ADR 0013 kept each member's real join date. Reading them as if Start had
+// moved every active member back to the start date matches what Start does now.
+function fromStart(members: { [userId: string]: MemberDoc }, challenge: ChallengeDoc | null): { [userId: string]: MemberDoc } {
+  if (challenge?.phase !== 'active' || challenge.joinsFromStart) return members
+  const startsOn = challenge.startsOn
+  return Object.fromEntries(
+    Object.entries(members).map(([userId, member]) => [
+      userId,
+      member.leftOn === null && member.joinedOn > startsOn ? { ...member, joinedOn: startsOn } : member,
+    ]),
+  )
 }
 
 function parseRhythm(raw: unknown): RhythmDoc {
@@ -135,12 +148,13 @@ function parseMap<T>(raw: unknown, read: (value: unknown) => T, what: string): {
 export function parseGroup(raw: unknown): GroupDoc {
   const row = record(raw, 'group')
   if (!Array.isArray(row.memberIds)) throw new Error('group member ids')
+  const challenge = nullable(row.challenge, parseChallenge)
   return {
     name: text(row.name, 'group name'),
     createdBy: text(row.createdBy, 'group creator'),
     memberIds: row.memberIds.map((id) => text(id, 'group member id')),
-    members: parseMap(row.members, parseMember, 'group members'),
-    challenge: nullable(row.challenge, parseChallenge),
+    members: fromStart(parseMap(row.members, parseMember, 'group members'), challenge),
+    challenge,
     rhythms: parseMap(row.rhythms, parseRhythm, 'group rhythms'),
   }
 }

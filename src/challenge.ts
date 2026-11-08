@@ -625,11 +625,11 @@ export async function startChallenge(
     const fromStart = joinedFromStart(group)
     if (startKind(activeMemberIds(group).length) === 'group') {
       if (input.cause.trim() !== '') throw new CommandError('cause_for_group')
-      return { ...fromStart, 'challenge.phase': 'active', 'challenge.cause': null }
+      return { ...fromStart, 'challenge.phase': 'active', 'challenge.cause': null, 'challenge.joinsFromStart': true }
     }
     const cause = parseCause(input.cause)
     if (!cause.ok) throw new CommandError(cause.failure)
-    return { ...fromStart, 'challenge.phase': 'active', 'challenge.cause': cause.name }
+    return { ...fromStart, 'challenge.phase': 'active', 'challenge.cause': cause.name, 'challenge.joinsFromStart': true }
   })
   if (!changed.ok) return changed
   if (!changed.group.challenge) throw new Error('challenge')
