@@ -668,33 +668,36 @@ export async function saveRhythm(
   return changed.ok ? { ok: true, rhythm: kind } : changed
 }
 
-export async function readChallengeHeadline(db: Database, groupId: GroupId): Promise<ChallengeHeadline | null> {
-  const group = await readGroup(db, groupId)
-  if (!group?.challenge) return null
+export function challengeHeadlineFrom(group: GroupDoc): ChallengeHeadline | null {
+  if (!group.challenge) return null
   const stored = storedFrom(group.challenge)
   return { terms: stored.terms, minorDigits: stored.minorDigits, stakesGo: stored.phase === 'active' ? stored.stakesGo : null }
+}
+
+/** The viewer must be an active member of the group. */
+export function memberChallengeFrom(group: GroupDoc): MemberChallengeCard {
+  const cap = ACTIVE_MEMBER_CAP
+  const currencies = CURRENCY_CODES as readonly CurrencyCode[]
+  const checks = startChecks(group)
+  const missingRhythms = rhythmsMissing(group)
+  if (!group.challenge) return { phase: 'unopened', cap, currencies, checks, missingRhythms }
+  const stored = storedFrom(group.challenge)
+  const rhythms = rhythmLines(group)
+  if (stored.phase === 'draft') {
+    const start = startKind(activeMemberIds(group).length)
+    return { phase: 'draft', terms: stored.terms, minorDigits: stored.minorDigits, cap, start, checks, missingRhythms, currencies, rhythms }
+  }
+  return { phase: 'active', terms: stored.terms, minorDigits: stored.minorDigits, stakesGo: stored.stakesGo, rhythms }
+}
+
+export async function readChallengeHeadline(db: Database, groupId: GroupId): Promise<ChallengeHeadline | null> {
+  const group = await readGroup(db, groupId)
+  return group ? challengeHeadlineFrom(group) : null
 }
 
 export async function readMemberChallenge(db: Database, account: Account, groupId: GroupId): Promise<ReadChallengeResult> {
   const group = await readGroup(db, groupId)
   if (!group) return { ok: false, failure: 'group_missing' }
   if (!isActiveMember(group, account.id)) return { ok: false, failure: 'not_member' }
-  const cap = ACTIVE_MEMBER_CAP
-  const currencies = CURRENCY_CODES as readonly CurrencyCode[]
-  const checks = startChecks(group)
-  const missingRhythms = rhythmsMissing(group)
-  if (!group.challenge) return { ok: true, card: { phase: 'unopened', cap, currencies, checks, missingRhythms } }
-  const stored = storedFrom(group.challenge)
-  const rhythms = rhythmLines(group)
-  if (stored.phase === 'draft') {
-    const start = startKind(activeMemberIds(group).length)
-    return {
-      ok: true,
-      card: { phase: 'draft', terms: stored.terms, minorDigits: stored.minorDigits, cap, start, checks, missingRhythms, currencies, rhythms },
-    }
-  }
-  return {
-    ok: true,
-    card: { phase: 'active', terms: stored.terms, minorDigits: stored.minorDigits, stakesGo: stored.stakesGo, rhythms },
-  }
+  return { ok: true, card: memberChallengeFrom(group) }
 }

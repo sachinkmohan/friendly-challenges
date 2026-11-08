@@ -1,6 +1,6 @@
 import { stakesGoFrom } from './challenge.ts'
 import type { Database } from './db.ts'
-import { ACTIVE_MEMBER_CAP, activeMemberIds, compare, groupRef, memberOf, parseGroup, readGroup, readUsers, utcToday, type GroupDoc } from './store.ts'
+import { ACTIVE_MEMBER_CAP, activeMemberIds, compare, groupRef, memberOf, parseGroup, readGroup, readUsers, utcToday, type GroupDoc, type UserDoc } from './store.ts'
 import type { Account } from './identity.ts'
 
 export type GroupId = string & { readonly brand: 'GroupId' }
@@ -150,17 +150,16 @@ export async function deleteGroup(db: Database, actor: Account, groupId: GroupId
   return { ok: true, name: outcome.name }
 }
 
-export async function viewGroup(
-  db: Database,
-  account: Account | null,
+/** users must hold every active member when the viewer is one of them. */
+export function groupViewFrom(
   groupId: GroupId,
-): Promise<GroupView> {
-  const group = await readGroup(db, groupId)
-  if (!group) return { kind: 'missing' }
+  group: GroupDoc,
+  viewerId: string | null,
+  users: ReadonlyMap<string, UserDoc>,
+): Exclude<GroupView, { kind: 'missing' }> {
   const active = activeMemberIds(group)
   const activeCount = active.length
-  if (account && active.includes(account.id)) {
-    const users = await readUsers(db, active)
+  if (viewerId !== null && active.includes(viewerId)) {
     const members = active
       .map((userId): MemberLine => {
         const user = users.get(userId)
@@ -176,6 +175,18 @@ export async function viewGroup(
   if (isStartedSolo(group)) return { kind: 'solo', groupId, name: group.name, activeCount }
   if (activeCount >= ACTIVE_MEMBER_CAP) return { kind: 'full', groupId, name: group.name, activeCount }
   return { kind: 'preview', groupId, name: group.name, activeCount }
+}
+
+export async function viewGroup(
+  db: Database,
+  account: Account | null,
+  groupId: GroupId,
+): Promise<GroupView> {
+  const group = await readGroup(db, groupId)
+  if (!group) return { kind: 'missing' }
+  const active = activeMemberIds(group)
+  const users = account && active.includes(account.id) ? await readUsers(db, active) : new Map<string, UserDoc>()
+  return groupViewFrom(groupId, group, account?.id ?? null, users)
 }
 
 export async function listHomeGroups(db: Database, account: Account): Promise<readonly HomeGroup[]> {

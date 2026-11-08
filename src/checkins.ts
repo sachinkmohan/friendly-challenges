@@ -14,6 +14,7 @@ import {
   rhythmOf,
   type CheckInDoc,
   type GroupDoc,
+  type UserDoc,
 } from './store.ts'
 
 export const CHECK_IN_LABELS = {
@@ -156,10 +157,8 @@ export async function logCheckIn(
   }
 }
 
-export async function listCheckIns(db: Database, groupId: GroupId): Promise<readonly CheckIn[]> {
-  const checkIns = await readCheckIns(db, groupId)
-  const users = await readUsers(db, checkIns.map((item) => item.userId))
-  return checkIns
+export function checkInsFrom(rows: readonly CheckInDoc[], users: ReadonlyMap<string, UserDoc>): readonly CheckIn[] {
+  return rows
     .flatMap((item): CheckIn[] => {
       const user = users.get(item.userId)
       const day = parseIsoDate(item.day)
@@ -168,4 +167,9 @@ export async function listCheckIns(db: Database, groupId: GroupId): Promise<read
       return [{ userId: item.userId, displayName: user.displayName, day, color: item.color }]
     })
     .sort((a, b) => compare(b.day, a.day) || compare(a.displayName, b.displayName) || compare(a.userId, b.userId))
+}
+
+export async function listCheckIns(db: Database, groupId: GroupId): Promise<readonly CheckIn[]> {
+  const checkIns = await readCheckIns(db, groupId)
+  return checkInsFrom(checkIns, await readUsers(db, checkIns.map((item) => item.userId)))
 }
