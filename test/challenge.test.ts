@@ -288,7 +288,7 @@ test('one member starts a solo challenge owed to a cause and two to five start o
     assert.deepEqual(await startChallenge(db, ada, pair, { cause: 'Food bank' }), { ok: false, failure: 'cause_for_group' })
     assert.equal((await challengeOf(db, pair))?.phase, 'draft')
     assert.deepEqual(await startChallenge(db, ada, pair, { cause: '  ' }), { ok: true })
-    assert.deepEqual(await startChallenge(db, grace, pair, { cause: 'Food bank' }), { ok: true })
+    assert.deepEqual(await startChallenge(db, grace, pair, { cause: 'Food bank' }), { ok: false, failure: 'not_creator' })
     const startedPair = await challengeOf(db, pair)
     assert.equal(startedPair?.phase, 'active')
     assert.equal(startedPair?.phase === 'active' ? startedPair.cause : 'draft', null)
@@ -314,6 +314,26 @@ test('one member starts a solo challenge owed to a cause and two to five start o
     ])
     assert.deepEqual(await startChallenge(db, ada, crowded, noCause), { ok: false, failure: 'outside_headcount' })
     assert.equal((await challengeOf(db, crowded))?.phase, 'draft')
+  } finally {
+    await closeDatabase(db)
+  }
+})
+
+test('only the creator saves the terms and starts the challenge', async () => {
+  const db = openTestDatabase()
+  try {
+    const people = await Promise.all(['Ada', 'Grace'].map((name) => person(db, name)))
+    const [ada, grace] = people as [Account, Account]
+    const groupId = await groupWith(db, people)
+    assert.deepEqual(await saveChallenge(db, grace, groupId, terms()), { ok: false, failure: 'not_creator' })
+    assert.equal(await challengeOf(db, groupId), null)
+    assert.deepEqual(await saveChallenge(db, ada, groupId, terms()), { ok: true })
+    assert.deepEqual(await saveChallenge(db, grace, groupId, terms({ stake: '50' })), { ok: false, failure: 'not_creator' })
+    assert.equal(await stakeOf(db, groupId), 500)
+    assert.deepEqual(await startChallenge(db, grace, groupId, noCause), { ok: false, failure: 'not_creator' })
+    assert.equal((await challengeOf(db, groupId))?.phase, 'draft')
+    assert.deepEqual(await startChallenge(db, ada, groupId, noCause), { ok: true })
+    assert.equal((await challengeOf(db, groupId))?.phase, 'active')
   } finally {
     await closeDatabase(db)
   }
@@ -538,6 +558,13 @@ test('the group card saves the stake, starts with the people who are active, and
     assert.equal((await challengeOf(db, groupId))?.phase, 'draft')
 
     assert.equal((await post(base, `${groupPath}/join`, graceCookie)).status, 303)
+    const graceTerms = await post(base, `${groupPath}/challenge`, graceCookie, challengeForm({ stake: '50' }))
+    assert.equal(graceTerms.status, 403)
+    assert.match(await graceTerms.text(), /Only the person who made the group can change the terms or start the challenge\./)
+    assert.equal((await challengeOf(db, groupId))?.stakeMinor, 5)
+    const graceStart = await post(base, `${groupPath}/challenge/start`, graceCookie, '')
+    assert.equal(graceStart.status, 403)
+    assert.equal((await challengeOf(db, groupId))?.phase, 'draft')
     const pairHtml = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
     assert.match(pairHtml, /action="[^"]+\/challenge\/start#start"/)
     assert.doesNotMatch(pairHtml, /name="cause"/)
@@ -554,7 +581,7 @@ test('the group card saves the stake, starts with the people who are active, and
     assert.match(ready, /action="[^"]+\/challenge\/start#start"/)
     const started = await post(base, `${groupPath}/challenge/start`, adaCookie, '')
     assert.equal(started.status, 303)
-    const startedAgain = await post(base, `${groupPath}/challenge/start`, graceCookie, '')
+    const startedAgain = await post(base, `${groupPath}/challenge/start`, adaCookie, '')
     assert.equal(startedAgain.status, 303)
     const activeHtml = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
     assert.match(activeHtml, /5 JPY/)

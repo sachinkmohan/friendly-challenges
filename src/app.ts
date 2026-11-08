@@ -238,7 +238,7 @@ async function handleGroup(
 type ChallengeRoute = Extract<GroupRoute, { kind: 'save_challenge' | 'start_challenge' | 'save_rhythm' }>
 
 function challengeStatus(failure: ChallengeFailure): number {
-  if (failure === 'not_member') return 403
+  if (failure === 'not_member' || failure === 'not_creator') return 403
   if (failure === 'group_missing') return 404
   if (
     failure === 'frozen' ||

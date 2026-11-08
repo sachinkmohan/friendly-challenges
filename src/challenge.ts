@@ -167,6 +167,7 @@ export type ChallengeFailure =
   | TermsFailure
   | 'group_missing'
   | 'not_member'
+  | 'not_creator'
   | 'frozen'
   | 'no_challenge'
   | 'outside_headcount'
@@ -191,6 +192,7 @@ export const challengeFailureCopy = {
   ends_before_start: 'End on or after the start date.',
   group_missing: 'That group does not exist.',
   not_member: 'Join the group before changing the challenge.',
+  not_creator: 'Only the person who made the group can change the terms or start the challenge.',
   frozen: 'This challenge has started, so those fields stay as they are.',
   no_challenge: 'Name the challenge before choosing how often you log.',
   outside_headcount: 'The number of active people is outside the range on this card.',
@@ -207,7 +209,7 @@ export type SaveChallengeResult =
   | { readonly ok: true }
   | {
       readonly ok: false
-      readonly failure: TermsFailure | 'group_missing' | 'not_member' | 'frozen' | 'anchor_after_end'
+      readonly failure: TermsFailure | 'group_missing' | 'not_member' | 'not_creator' | 'frozen' | 'anchor_after_end'
     }
 
 export type StartChallengeResult =
@@ -217,6 +219,7 @@ export type StartChallengeResult =
       readonly failure:
         | 'group_missing'
         | 'not_member'
+        | 'not_creator'
         | 'no_challenge'
         | 'outside_headcount'
         | 'cause_empty'
@@ -555,6 +558,10 @@ function isActiveMember(group: GroupDoc, userId: string): boolean {
   return memberOf(group, userId)?.leftOn === null
 }
 
+function requireCreator(group: GroupDoc, account: Account): void {
+  if (group.createdBy !== account.id) throw new CommandError('not_creator')
+}
+
 // Every write reads the group document first, so writers to one group serialize on it and each rule sees the latest members, terms, and rhythms.
 type FailureOf<R> = R extends { readonly ok: false; readonly failure: infer F } ? F : never
 
@@ -588,6 +595,7 @@ export async function saveChallenge(
   const parsed = parseChallengeInput(input)
   if (!parsed.ok) return parsed
   return changeGroup<SaveChallengeResult>(db, account, groupId, (group) => {
+    requireCreator(group, account)
     const minorDigits = minorDigitsOf(parsed.value.currency)
     if (minorDigits === null) throw new CommandError('bad_currency')
     const scaled = scaleStake(parsed.value.stake, minorDigits)
@@ -620,6 +628,7 @@ export async function startChallenge(
   input: StartInput,
 ): Promise<StartChallengeResult> {
   return changeGroup<StartChallengeResult>(db, account, groupId, (group) => {
+    requireCreator(group, account)
     if (group.challenge?.phase === 'active') return null
     const unmet = startChecks(group).find((check) => !check.done)
     if (unmet) throw new CommandError(startStepFailure[unmet.step])
