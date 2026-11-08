@@ -1,3 +1,5 @@
+import type { Browser } from './browser.ts'
+
 export type GoogleIdentity = {
   sub: string
   email: string
@@ -21,7 +23,7 @@ export type FirebaseWebConfig = {
 }
 
 export type Viewer =
-  | { state: 'signed_out'; firebase: FirebaseWebConfig | null }
+  | { state: 'signed_out'; firebase: FirebaseWebConfig | null; origin: string; browser: Browser }
   | { state: 'signed_in'; account: Account }
 
 export type IdToken = {

@@ -31,7 +31,8 @@ import { DAY_MARK_LABELS, type GroupCalendar, type Heatmap, type MarkedDay } fro
 import { dropoutFailureCopy, type DropoutFailure, type DropoutInput } from './dropouts.ts'
 import { CHECK_IN_LABELS, checkInFailureCopy, type CheckIn, type CheckInFailure } from './checkins.ts'
 import { deleteFailureCopy, parseGroupId, type DeleteFailure, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
-import { authFailureCopy, type Account, type AuthFailure, type FirebaseWebConfig, type Viewer } from './identity.ts'
+import type { Browser, Os } from './browser.ts'
+import { authFailureCopy, type Account, type AuthFailure, type Viewer } from './identity.ts'
 
 function escapeHtml(value: string): string {
   return value
@@ -300,6 +301,23 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
     }
     a.button:active, button:active { transform: scale(0.98); }
     .sign-in-error { margin-top: 8px; color: #b3392f; }
+    .in-app { margin-top: 16px; padding: 16px; border-radius: 14px; background: #f6efe2; }
+    .in-app p { margin: 0; }
+    .in-app .field-hint { margin-top: 8px; }
+    .in-app-link {
+      display: block;
+      width: 100%;
+      min-height: 48px;
+      margin-top: 12px;
+      padding: 0 12px;
+      border: 1.5px solid #e7e0d4;
+      border-radius: 12px;
+      background: #fffdf8;
+      color: #1c1915;
+      font: inherit;
+      font-size: 16px;
+    }
+    button.secondary { background: #fffdf8; color: #1c1915; box-shadow: inset 0 0 0 1.5px #1c1915; }
     .tabbar {
       flex: none;
       display: flex;
@@ -399,6 +417,20 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
       error.textContent = text
       error.hidden = false
     }
+    document.querySelectorAll('.in-app').forEach((card) => {
+      const field = card.querySelector('.in-app-link')
+      const copy = card.querySelector('.copy-link')
+      copy.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(field.value)
+          copy.textContent = 'Copied'
+        } catch {
+          field.focus()
+          field.setSelectionRange(0, field.value.length)
+          copy.textContent = 'Press and hold the link to copy it'
+        }
+      })
+    })
     if (forms.length > 0) {
       try {
         const [{ initializeApp }, { getAuth, GoogleAuthProvider, signInWithPopup, signOut }] = await Promise.all([
@@ -407,7 +439,7 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
         ])
         const auth = getAuth(initializeApp(JSON.parse(forms[0].dataset.firebase)))
         forms.forEach((form) => {
-          form.querySelector('button').addEventListener('click', async () => {
+          form.querySelector('button.google').addEventListener('click', async () => {
             form.querySelector('.sign-in-error').hidden = true
             const provider = new GoogleAuthProvider()
             provider.setCustomParameters({ prompt: 'select_account' })
@@ -422,7 +454,8 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
               if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
                 showError(form, 'Sign-in did not finish. Try again.')
               } else if (blockedHere.includes(code)) {
-                showError(form, 'This browser blocked the Google sign-in window (' + code + '). If you opened the link inside another app, open it in Chrome or Safari.')
+                form.querySelector('.in-app').hidden = false
+                showError(form, 'This browser blocked the Google sign-in window (' + code + ').')
               } else {
                 showError(form, 'Sign-in did not finish (' + code + '). Try again.')
               }
@@ -480,12 +513,35 @@ function activeCountText(count: number): string {
   return `${count} active`
 }
 
-function signInControl(firebase: FirebaseWebConfig | null, returnPath: string): string {
-  if (!firebase) return '<p>Sign-in is not configured. Set FIREBASE_API_KEY and FIREBASE_AUTH_DOMAIN.</p>'
-  return `<form class="sign-in" method="post" action="/auth/firebase" data-firebase="${escapeHtml(JSON.stringify(firebase))}">
+type SignedOut = Extract<Viewer, { state: 'signed_out' }>
+
+function openInBrowserHelp(link: URL, os: Os): string {
+  if (os === 'android') {
+    const intent = `intent://${link.host}${link.pathname}${link.search}#Intent;scheme=${link.protocol.slice(0, -1)};end`
+    return `<a class="button" href="${escapeHtml(intent)}">Open in your browser</a>`
+  }
+  if (os === 'ios') return '<p class="field-hint">Or tap ⋯ or the share icon, then Open in browser.</p>'
+  return '<p class="field-hint">Then paste it into your browser.</p>'
+}
+
+function inAppCard(link: URL, browser: Browser): string {
+  return `<div class="in-app"${browser.inApp ? '' : ' hidden'}>
+        <p><strong>Google sign-in does not work here.</strong> Open this link in your browser to sign in.</p>
+        <input class="in-app-link" type="text" readonly value="${escapeHtml(link.href)}" aria-label="Link to this page">
+        <button type="button" class="copy-link">Copy link</button>
+        ${openInBrowserHelp(link, browser.os)}
+      </div>`
+}
+
+function signInControl(viewer: SignedOut, returnPath: string): string {
+  if (!viewer.firebase) return '<p>Sign-in is not configured. Set FIREBASE_API_KEY and FIREBASE_AUTH_DOMAIN.</p>'
+  const link = new URL(returnPath, `${viewer.origin}/`)
+  const label = viewer.browser.inApp ? 'Try Google sign-in anyway' : 'Sign in with Google'
+  return `<form class="sign-in" method="post" action="/auth/firebase" data-firebase="${escapeHtml(JSON.stringify(viewer.firebase))}">
       <input type="hidden" name="return" value="${escapeHtml(returnPath)}">
       <input type="hidden" name="idToken">
-      <button type="button">Sign in with Google</button>
+      ${inAppCard(link, viewer.browser)}
+      <button type="button" class="google${viewer.browser.inApp ? ' secondary' : ''}">${label}</button>
       <p class="sign-in-error" role="alert" hidden></p>
     </form>`
 }
@@ -590,20 +646,20 @@ function heatmapGrid(heatmap: Heatmap): string {
   return `${title}<div class="grid-scroll"><table class="grid heatmap" data-group="${escapeHtml(heatmap.groupId)}"><tbody>${rows}</tbody></table></div>`
 }
 
-function signedOutScreens(firebase: FirebaseWebConfig | null): string {
+function signedOutScreens(viewer: SignedOut): string {
   return `
     <section id="home" class="screen">
       <article class="card">
         <h2>Sign in</h2>
         <p>Sign in with the Google account you will use for your group.</p>
-        ${signInControl(firebase, '/')}
+        ${signInControl(viewer, '/')}
       </article>
     </section>
     <section id="account" class="screen">
       <article class="card">
         <h2>Account</h2>
         <p>No account on this device yet. Google sign-in stores one account for this app.</p>
-        ${signInControl(firebase, '/')}
+        ${signInControl(viewer, '/')}
       </article>
     </section>
   `
@@ -643,7 +699,7 @@ function signedInScreens(account: Account, groups: readonly HomeGroup[], heatmap
 }
 
 export function renderHome(page: HomePage): string {
-  const screens = page.state === 'signed_out' ? signedOutScreens(page.firebase) : signedInScreens(page.account, page.groups, page.heatmaps)
+  const screens = page.state === 'signed_out' ? signedOutScreens(page) : signedInScreens(page.account, page.groups, page.heatmaps)
   return frame(screens, tabBar('#home', '#account'))
 }
 
@@ -663,7 +719,7 @@ export function renderNewGroup(viewer: Viewer, error?: 'name_empty' | 'name_too_
     return groupCard(`
       <h2>Create a group</h2>
       <p>Sign in to create a group.</p>
-      ${signInControl(viewer.firebase, `${groupsRoot}/new`)}
+      ${signInControl(viewer, `${groupsRoot}/new`)}
     `)
   }
   const message =
@@ -1098,7 +1154,7 @@ function memberItem(member: MemberLine, rhythms: readonly RhythmLine[]): string 
 }
 
 function joinControl(groupId: GroupId, viewer: Viewer): string {
-  if (viewer.state === 'signed_out') return signInControl(viewer.firebase, groupHref(groupId))
+  if (viewer.state === 'signed_out') return signInControl(viewer, groupHref(groupId))
   const action = escapeHtml(`${groupHref(groupId)}${joinSuffix}`)
   return `<form method="post" action="${action}"><button type="submit">Join group</button></form>`
 }

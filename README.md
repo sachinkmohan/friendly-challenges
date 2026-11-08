@@ -24,6 +24,8 @@ Open `http://localhost:3000`. Use `localhost`, not `127.0.0.1`, because only `lo
 
 Signing in again with the same Google account updates that account. It does not create a second user.
 
+Google refuses sign-in inside other apps' built-in browsers, such as WhatsApp, Instagram, or Facebook. When the page is opened in one, it shows the link with a Copy button above a smaller Google button. On Android it also offers an **Open in your browser** button. On iOS it says to tap ⋯ and open the page in the browser. If a Google popup is blocked in any browser, the page shows the same box.
+
 The emulator starts empty each time, then loads the sample group.
 
 ## Host

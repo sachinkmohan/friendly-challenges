@@ -19,6 +19,7 @@ import type { IsoDate } from './challenge.ts'
 import { listCheckIns, logCheckIn, type CheckInInput } from './checkins.ts'
 import { recordDropout, type DropoutFailure, type DropoutInput } from './dropouts.ts'
 import { createGroup, deleteGroup, joinGroup, listHomeGroups, viewGroup, type GroupId } from './groups.ts'
+import { readBrowser } from './browser.ts'
 import { googleIdentity, type Account, type AuthFailure, type FirebaseWebConfig, type IdToken, type Viewer } from './identity.ts'
 import {
   groupHref,
@@ -75,7 +76,9 @@ function sendRedirect(res: ServerResponse, location: string, cookies: string[] =
 async function viewerFrom(req: IncomingMessage, deps: AppDeps): Promise<Viewer> {
   const token = readCookie(req.headers.cookie, SESSION_COOKIE)
   const account = await accountForSession(deps.db, token)
-  if (!account) return { state: 'signed_out', firebase: deps.firebase }
+  if (!account) {
+    return { state: 'signed_out', firebase: deps.firebase, origin: requestOrigin(req), browser: readBrowser(req.headers['user-agent']) }
+  }
   return { state: 'signed_in', account }
 }
 
@@ -191,7 +194,7 @@ async function handleGroup(
   if (route.kind === 'show') {
     if (method !== 'GET') return rejectMethod(res, 'GET')
     if (viewer.state === 'signed_out') {
-      await sendGroupPage(res, 200, null, route.groupId, origin, deps)
+      await sendGroupPage(res, 200, viewer, route.groupId, origin, deps)
       return
     }
     await sendMemberPage(res, 200, viewer.account, route.groupId, origin, deps)
@@ -224,7 +227,7 @@ async function handleGroup(
       sendHtml(res, 404, renderMessage('Not found', 'That page does not exist.'))
       return
     }
-    await sendGroupPage(res, view.kind === 'full' || view.kind === 'solo' ? 409 : 401, null, route.groupId, origin, deps)
+    await sendGroupPage(res, view.kind === 'full' || view.kind === 'solo' ? 409 : 401, viewer, route.groupId, origin, deps)
     return
   }
   const joined = await joinGroup(deps.db, viewer.account, route.groupId)
@@ -236,7 +239,7 @@ async function handleGroup(
     sendHtml(res, 404, renderMessage('Not found', 'That page does not exist.'))
     return
   }
-  await sendGroupPage(res, 409, viewer.account, route.groupId, origin, deps)
+  await sendGroupPage(res, 409, viewer, route.groupId, origin, deps)
 }
 
 type ChallengeRoute = Extract<GroupRoute, { kind: 'save_challenge' | 'start_challenge' | 'save_rhythm' }>
@@ -263,12 +266,13 @@ function notFound(res: ServerResponse): void {
 async function sendGroupPage(
   res: ServerResponse,
   status: number,
-  account: Account | null,
+  viewer: Viewer,
   groupId: GroupId,
   origin: string,
   deps: AppDeps,
   attempt?: ChallengeAttempt,
 ): Promise<void> {
+  const account = viewer.state === 'signed_in' ? viewer.account : null
   const view = await viewGroup(deps.db, account, groupId)
   if (view.kind === 'missing') {
     notFound(res)
@@ -283,7 +287,6 @@ async function sendGroupPage(
     return
   }
   const headline = await readChallengeHeadline(deps.db, groupId)
-  const viewer: Viewer = account ? { state: 'signed_in', account } : { state: 'signed_out', firebase: deps.firebase }
   sendHtml(res, status, renderGroup({ ...view, headline }, viewer, origin, attempt))
 }
 
@@ -350,7 +353,7 @@ async function finishChallenge(
   const failure: ChallengeAttempt = { [slot]: result.failure }
   const attempt: ChallengeAttempt = status === 409 ? failure : { ...failure, ...drafts }
   if (result.failure === 'not_member') {
-    await sendGroupPage(res, status, account, groupId, origin, deps, attempt)
+    await sendGroupPage(res, status, { state: 'signed_in', account }, groupId, origin, deps, attempt)
     return
   }
   await sendMemberPage(res, status, account, groupId, origin, deps, attempt)
@@ -368,7 +371,7 @@ async function postChallenge(
   if (method !== 'POST') return rejectMethod(res, 'POST')
   if (viewer.state === 'signed_out') {
     req.resume()
-    await sendGroupPage(res, 401, null, route.groupId, origin, deps)
+    await sendGroupPage(res, 401, viewer, route.groupId, origin, deps)
     return
   }
   const form = await readForm(req)
@@ -410,7 +413,7 @@ async function postCheckIn(
   if (method !== 'POST') return rejectMethod(res, 'POST')
   if (viewer.state === 'signed_out') {
     req.resume()
-    await sendGroupPage(res, 401, null, groupId, origin, deps)
+    await sendGroupPage(res, 401, viewer, groupId, origin, deps)
     return
   }
   const form = await readForm(req)
@@ -426,7 +429,7 @@ async function postCheckIn(
     return
   }
   if (logged.failure === 'not_member') {
-    await sendGroupPage(res, 403, viewer.account, groupId, origin, deps, { checkInFailure: logged.failure })
+    await sendGroupPage(res, 403, viewer, groupId, origin, deps, { checkInFailure: logged.failure })
     return
   }
   await sendMemberPage(res, 400, viewer.account, groupId, origin, deps, {
@@ -453,7 +456,7 @@ async function postPayment(
   if (method !== 'POST') return rejectMethod(res, 'POST')
   if (viewer.state === 'signed_out') {
     req.resume()
-    await sendGroupPage(res, 401, null, groupId, origin, deps)
+    await sendGroupPage(res, 401, viewer, groupId, origin, deps)
     return
   }
   const form = await readForm(req)
@@ -475,7 +478,7 @@ async function postPayment(
   }
   const attempt: ChallengeAttempt = { paymentFailure: recorded.failure, paymentDraft: input }
   if (recorded.failure === 'not_member') {
-    await sendGroupPage(res, 403, viewer.account, groupId, origin, deps, attempt)
+    await sendGroupPage(res, 403, viewer, groupId, origin, deps, attempt)
     return
   }
   await sendMemberPage(res, paymentStatus(recorded.failure), viewer.account, groupId, origin, deps, attempt)
@@ -498,7 +501,7 @@ async function postDropout(
   if (method !== 'POST') return rejectMethod(res, 'POST')
   if (viewer.state === 'signed_out') {
     req.resume()
-    await sendGroupPage(res, 401, null, groupId, origin, deps)
+    await sendGroupPage(res, 401, viewer, groupId, origin, deps)
     return
   }
   const form = await readForm(req)
@@ -515,7 +518,7 @@ async function postDropout(
   }
   const attempt: ChallengeAttempt = { dropoutFailure: recorded.failure, dropoutDraft: input }
   if (recorded.failure === 'not_member') {
-    await sendGroupPage(res, 403, viewer.account, groupId, origin, deps, attempt)
+    await sendGroupPage(res, 403, viewer, groupId, origin, deps, attempt)
     return
   }
   await sendMemberPage(res, dropoutStatus(recorded.failure), viewer.account, groupId, origin, deps, attempt)
@@ -533,7 +536,7 @@ async function postDelete(
   if (method !== 'POST') return rejectMethod(res, 'POST')
   if (viewer.state === 'signed_out') {
     req.resume()
-    await sendGroupPage(res, 401, null, groupId, origin, deps)
+    await sendGroupPage(res, 401, viewer, groupId, origin, deps)
     return
   }
   const form = await readForm(req)
@@ -549,7 +552,7 @@ async function postDelete(
   }
   const attempt: ChallengeAttempt = { deleteFailure: deleted.failure }
   if (deleted.failure === 'not_member') {
-    await sendGroupPage(res, 403, viewer.account, groupId, origin, deps, attempt)
+    await sendGroupPage(res, 403, viewer, groupId, origin, deps, attempt)
     return
   }
   await sendMemberPage(res, deleted.failure === 'not_creator' ? 403 : 400, viewer.account, groupId, origin, deps, attempt)
