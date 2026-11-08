@@ -419,7 +419,7 @@ async function postCheckIn(
   const form = await readForm(req)
   if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
   const input: CheckInInput = { day: form.get('day') ?? '', color: form.get('color') ?? '' }
-  const logged = await logCheckIn(deps.db, viewer.account, groupId, input)
+  const logged = await logCheckIn(deps.db, viewer.account, groupId, input, today(deps))
   if (logged.ok) {
     sendRedirect(res, groupHref(groupId), [], 303)
     return

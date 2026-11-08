@@ -937,10 +937,12 @@ function checkInControl(
     <script>
       (function () {
         var input = document.getElementById('check-in-day')
-        if (!input || input.value) return
+        if (!input) return
         var now = new Date()
         var pad = function (n) { return String(n).padStart(2, '0') }
-        input.value = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate())
+        var today = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate())
+        if (today < input.max) input.max = today
+        if (!input.value) input.value = today
       })()
     </script>`
 }

@@ -1,5 +1,5 @@
 import type { Database } from './db.ts'
-import { memberIsDue, parseIsoDate, rhythmFrom, spanFrom, windowFrom, type IsoDate, type MembershipSpan } from './challenge.ts'
+import { memberIsDue, parseIsoDate, rhythmFrom, spanFrom, utcOrdinal, windowFrom, type IsoDate, type MembershipSpan } from './challenge.ts'
 import type { GroupId } from './groups.ts'
 import type { Account } from './identity.ts'
 import { checkInRef, compare, memberOf, readCheckIns, readGroup, readUsers, rhythmOf, type CheckInDoc } from './store.ts'
@@ -27,6 +27,7 @@ export type CheckInFailure =
   | 'group_missing'
   | 'not_member'
   | 'bad_day'
+  | 'future_day'
   | 'bad_color'
   | 'outside_membership'
   | 'not_due'
@@ -35,6 +36,7 @@ export const checkInFailureCopy = {
   group_missing: 'That group does not exist.',
   not_member: 'Join the group before you log a day.',
   bad_day: 'Use a real date.',
+  future_day: 'That day has not come yet.',
   bad_color: 'Pick green or red.',
   outside_membership: 'You were not in the group on that day.',
   not_due: 'That day is not one of your logging days.',
@@ -55,6 +57,11 @@ export function isColor(value: string): value is CheckInColor {
   return Object.prototype.hasOwnProperty.call(CHECK_IN_LABELS, value)
 }
 
+// Today is the UTC day. Tomorrow is allowed too, because it has already begun in time zones ahead of UTC.
+function hasBegun(day: IsoDate, today: IsoDate): boolean {
+  return utcOrdinal(day) <= utcOrdinal(today) + 1
+}
+
 function withinSpan(span: MembershipSpan, day: IsoDate): boolean {
   return day >= span.joinedOn && (span.leftOn === null || day <= span.leftOn)
 }
@@ -64,9 +71,11 @@ export async function logCheckIn(
   account: Account,
   groupId: GroupId,
   input: CheckInInput,
+  today: IsoDate,
 ): Promise<LogCheckInResult> {
   const day = parseIsoDate(input.day)
   if (!day) return { ok: false, failure: 'bad_day' }
+  if (!hasBegun(day, today)) return { ok: false, failure: 'future_day' }
   if (!isColor(input.color)) return { ok: false, failure: 'bad_color' }
   const checkIn: CheckInDoc = { userId: account.id, day, color: input.color }
   try {

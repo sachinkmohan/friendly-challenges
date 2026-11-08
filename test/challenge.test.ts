@@ -642,7 +642,7 @@ test('the group card saves the stake, starts with the people who are active, and
     const lateHtml = await (await fetch(`${base}${groupPath}`, { headers: { cookie: noorCookie } })).text()
     assert.match(lateHtml, /Pick your rhythm to start logging/)
     assert.match(lateHtml, /name="interval"/)
-    assert.doesNotMatch(lateHtml, /Kept it|Missed it/)
+    assert.doesNotMatch(lateHtml, /name="color"/)
     assert.equal((await post(base, `${groupPath}/rhythm`, noorCookie, form({ interval: 'every_day' }))).status, 303)
     const rhythmHtml = await (await fetch(`${base}${groupPath}`, { headers: { cookie: noorCookie } })).text()
     assert.match(rhythmHtml, /Every day/)
