@@ -184,7 +184,7 @@ export const challengeFailureCopy = {
   outside_headcount: 'The number of active people is outside the range on this card.',
   cause_empty: 'Type who your missed days are owed to.',
   cause_too_long: 'Use 40 characters or fewer.',
-  cause_for_group: 'Someone else is active now, so this challenge starts with no cause. Start it again.',
+  cause_for_group: 'Someone else joined, so this is a group challenge now and needs no cause. Press Start again.',
   rhythm_past_end: 'Fix a logging anchor that sits after the challenge ends.',
   bad_interval: 'Pick how often you log.',
   bad_anchor: 'Use a real anchor date.',

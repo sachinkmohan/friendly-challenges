@@ -326,19 +326,31 @@ test('a solo member owes the cause one stake per red day, less what they paid it
   const ada = member('ada', '2026-11-01', { '2026-11-01': 'red', '2026-11-02': 'green', '2026-11-03': 'red' })
   const calendar = buildCalendar({ window, today: iso('2026-11-05') }, [ada])
   const cause = { kind: 'cause' } as const
-  assert.deepEqual(soloDue(calendar, 500, []), { owedMinor: 1500, paidMinor: 0, dueMinor: 1500 })
+  assert.deepEqual(soloDue(calendar, 'ada', 500, []), { owedMinor: 1500, paidMinor: 0, dueMinor: 1500 })
   assert.deepEqual(
-    soloDue(calendar, 500, [
+    soloDue(calendar, 'ada', 500, [
       { payee: cause, amountMinor: 400 },
       { payee: cause, amountMinor: 100 },
     ]),
     { owedMinor: 1500, paidMinor: 500, dueMinor: 1000 },
   )
-  assert.deepEqual(soloDue(calendar, 500, [{ payee: cause, amountMinor: 2000 }]), {
+  assert.deepEqual(soloDue(calendar, 'ada', 500, [{ payee: cause, amountMinor: 2000 }]), {
     owedMinor: 1500,
     paidMinor: 2000,
     dueMinor: -500,
   })
+})
+
+test('a solo member owes the cause only for their own red days', () => {
+  const ada = member('ada', '2026-11-01', {
+    '2026-11-01': 'red',
+    '2026-11-02': 'green',
+    '2026-11-03': 'green',
+    '2026-11-04': 'green',
+  })
+  const bea = member('bea', '2026-11-01', { '2026-11-01': 'red', '2026-11-02': 'red' }, '2026-11-02')
+  const calendar = buildCalendar({ window, today: iso('2026-11-05') }, [ada, bea])
+  assert.equal(soloDue(calendar, 'ada', 500, []).owedMinor, 500)
 })
 
 async function soloCrew(): Promise<{ db: Database; ada: Account; groupId: GroupId }> {

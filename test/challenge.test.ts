@@ -533,7 +533,7 @@ test('the group card saves the stake, starts with the people who are active, and
     const staleSolo = await post(base, `${groupPath}/challenge/start`, adaCookie, form({ cause: 'Food bank' }))
     assert.equal(staleSolo.status, 409)
     const staleSoloHtml = await staleSolo.text()
-    assert.match(staleSoloHtml, /Someone else is active now, so this challenge starts with no cause\. Start it again\./)
+    assert.match(staleSoloHtml, /Someone else joined, so this is a group challenge now and needs no cause\. Press Start again\./)
     assert.doesNotMatch(staleSoloHtml, /name="cause"/)
     assert.equal((await challengeOf(db, groupId))?.phase, 'draft')
 

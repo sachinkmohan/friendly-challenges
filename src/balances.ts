@@ -179,14 +179,13 @@ function calendarDebts(
 
 export function soloDue(
   calendar: GroupCalendar,
+  memberId: string,
   stakeMinor: number,
   payments: readonly Pick<Payment, 'payee' | 'amountMinor'>[],
 ): SoloDue {
   let owedMinor = 0
-  for (const row of calendar.rows) {
-    for (const marked of row.days) {
-      if (marked.mark === 'red') owedMinor = addMinor(owedMinor, stakeMinor)
-    }
+  for (const marked of calendar.rows.find((row) => row.userId === memberId)?.days ?? []) {
+    if (marked.mark === 'red') owedMinor = addMinor(owedMinor, stakeMinor)
   }
   let paidMinor = 0
   for (const payment of payments) {
@@ -358,7 +357,7 @@ export async function readLedger(db: Database, groupId: GroupId, today: IsoDate)
       ...base,
       member: { userId: member.userId, displayName: member.displayName },
       cause: terms.stakesGo.name,
-      ...soloDue(calendar, terms.stakeMinor, payments),
+      ...soloDue(calendar, member.userId, terms.stakeMinor, payments),
     }
   }
   const debts = calendarDebts(calendar, terms.stakeMinor, members)
