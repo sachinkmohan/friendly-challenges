@@ -36,6 +36,7 @@ import {
 } from './page.ts'
 import { accountForSession, createSession, deleteSession } from './sessions.ts'
 import { checkInToast, takeToast, toastCookie, type Toast, type ToastReceipt } from './toasts.ts'
+import { timeStep } from './timing.ts'
 
 const SESSION_COOKIE = 'session'
 const SESSION_MAX_AGE = 60 * 60 * 24 * 30
@@ -78,7 +79,7 @@ function sendRedirect(res: ServerResponse, location: string, cookies: string[] =
 
 async function viewerFrom(req: IncomingMessage, deps: AppDeps): Promise<Viewer> {
   const token = readCookie(req.headers.cookie, SESSION_COOKIE)
-  const account = await accountForSession(deps.db, token)
+  const account = await timeStep('session', () => accountForSession(deps.db, token))
   if (!account) {
     return { state: 'signed_out', firebase: deps.firebase, origin: requestOrigin(req), browser: readBrowser(req.headers['user-agent']) }
   }
