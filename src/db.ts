@@ -1,5 +1,5 @@
 import { cert, deleteApp, initializeApp, type App, type AppOptions } from 'firebase-admin/app'
-import { getAuth, type Auth } from 'firebase-admin/auth'
+import type { Auth } from 'firebase-admin/auth'
 import { getFirestore, type Firestore } from 'firebase-admin/firestore'
 import type { FirebaseWebConfig } from './identity.ts'
 
@@ -46,7 +46,9 @@ function appFor(db: Database): App {
   return app
 }
 
-export function authFor(db: Database): Auth {
+// Only sign-in verifies ID tokens, so the auth SDK loads then instead of on every cold start.
+export async function authFor(db: Database): Promise<Auth> {
+  const { getAuth } = await import('firebase-admin/auth')
   return getAuth(appFor(db))
 }
 

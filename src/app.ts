@@ -92,7 +92,7 @@ function today(deps: AppDeps): IsoDate {
 }
 
 export function createApp(deps: AppDeps) {
-  const verifyIdToken = deps.verifyIdToken ?? ((token: string) => authFor(deps.db).verifyIdToken(token))
+  const verifyIdToken = deps.verifyIdToken ?? ((token: string) => authFor(deps.db).then((auth) => auth.verifyIdToken(token)))
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const origin = requestOrigin(req)
     const url = new URL(req.url ?? '/', `${origin}/`)
