@@ -30,7 +30,7 @@ function member(
     userId,
     displayName: userId,
     span: { joinedOn: iso(joinedOn), leftOn: leftOn === null ? null : iso(leftOn) },
-    rhythm: { kind: 'every_day', anchorOn: iso('2026-11-01') },
+    rhythm: { kind: 'every_day' },
     colors: new Map(Object.entries(colors).map(([day, color]) => [iso(day), color])),
   }
 }
@@ -113,12 +113,12 @@ async function crew(options: { start?: boolean } = {}): Promise<Crew> {
     endsOn: '2026-11-30',
   })
   if (!saved.ok) throw new Error(saved.failure)
-  for (const [who, interval, anchorOn] of [
-    [ada, 'every_day', '2026-11-01'],
-    [grace, 'every_2_days', '2026-11-02'],
-    [lin, 'every_day', '2026-11-01'],
+  for (const [who, interval] of [
+    [ada, 'every_day'],
+    [grace, 'every_3_days'],
+    [lin, 'every_day'],
   ] as const) {
-    const rhythm = await saveRhythm(db, who, groupId, { interval, anchorOn })
+    const rhythm = await saveRhythm(db, who, groupId, { interval })
     if (!rhythm.ok) throw new Error(rhythm.failure)
   }
   if (options.start !== false) {
@@ -368,7 +368,7 @@ async function soloCrew(): Promise<{ db: Database; ada: Account; groupId: GroupI
     endsOn: '2026-11-30',
   })
   if (!saved.ok) throw new Error(saved.failure)
-  const rhythm = await saveRhythm(db, ada, groupId, { interval: 'every_day', anchorOn: '2026-11-01' })
+  const rhythm = await saveRhythm(db, ada, groupId, { interval: 'every_day' })
   if (!rhythm.ok) throw new Error(rhythm.failure)
   const started = await startChallenge(db, ada, groupId, { cause: 'Food bank' })
   if (!started.ok) throw new Error(started.failure)

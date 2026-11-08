@@ -41,7 +41,6 @@ export type ChallengeDoc =
 
 export type RhythmDoc = {
   readonly kind: string
-  readonly anchorOn: Day
 }
 
 export type GroupDoc = {
@@ -125,7 +124,7 @@ function parseChallenge(raw: unknown): ChallengeDoc {
 
 function parseRhythm(raw: unknown): RhythmDoc {
   const row = record(raw, 'rhythm')
-  return { kind: text(row.kind, 'rhythm kind'), anchorOn: day(row.anchorOn, 'rhythm anchor') }
+  return { kind: text(row.kind, 'rhythm kind') }
 }
 
 function parseMap<T>(raw: unknown, read: (value: unknown) => T, what: string): { [key: string]: T } {

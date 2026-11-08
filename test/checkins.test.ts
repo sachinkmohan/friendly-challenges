@@ -11,8 +11,8 @@ import { closeServer, cookieFor, groupWith, listen, person, post, setJoinedOn, s
 
 type Crew = { db: Database; ada: Account; grace: Account; lin: Account; groupId: GroupId }
 
-async function rhythm(db: Database, who: Account, groupId: GroupId, interval: RhythmKind, anchorOn: string) {
-  const saved = await saveRhythm(db, who, groupId, { interval, anchorOn })
+async function rhythm(db: Database, who: Account, groupId: GroupId, interval: RhythmKind) {
+  const saved = await saveRhythm(db, who, groupId, { interval })
   if (!saved.ok) throw new Error(saved.failure)
 }
 
@@ -34,9 +34,9 @@ async function activeCrew(options: { start?: boolean } = {}): Promise<Crew> {
     endsOn: '2026-11-30',
   })
   if (!saved.ok) throw new Error(saved.failure)
-  await rhythm(db, ada, groupId, 'every_day', '2026-11-01')
-  await rhythm(db, grace, groupId, 'every_2_days', '2026-11-02')
-  await rhythm(db, lin, groupId, 'every_day', '2026-11-01')
+  await rhythm(db, ada, groupId, 'every_day')
+  await rhythm(db, grace, groupId, 'every_2_days')
+  await rhythm(db, lin, groupId, 'every_day')
   if (options.start !== false) {
     const started = await startChallenge(db, ada, groupId, { cause: '' })
     if (!started.ok) throw new Error(started.failure)
@@ -48,9 +48,9 @@ test('a due day saves once and a second save replaces the color', async () => {
   const { db, ada, grace, groupId } = await activeCrew()
   try {
     assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-03', color: 'green' }), { ok: true })
-    assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-04', color: 'red' }), { ok: true })
+    assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-05', color: 'red' }), { ok: true })
     assert.deepEqual(await listCheckIns(db, groupId), [
-      { userId: grace.id, displayName: 'Grace', day: '2026-11-04', color: 'red' },
+      { userId: grace.id, displayName: 'Grace', day: '2026-11-05', color: 'red' },
       { userId: ada.id, displayName: 'Ada', day: '2026-11-03', color: 'green' },
     ])
 
@@ -67,8 +67,8 @@ test('a day that is not due is rejected and nothing is written', async () => {
   const { db, ada, grace, groupId } = await activeCrew()
   try {
     const rejected: readonly (readonly [Account, string, string])[] = [
-      [grace, '2026-11-03', 'not_due'],
-      [grace, '2026-11-01', 'not_due'],
+      [grace, '2026-11-04', 'not_due'],
+      [grace, '2026-11-02', 'not_due'],
       [ada, '2026-12-01', 'not_due'],
       [ada, '2026-10-31', 'outside_membership'],
     ]
@@ -111,12 +111,12 @@ test('a day before joining or after leaving is rejected', async () => {
     })
     assert.deepEqual(await logCheckIn(db, lin, groupId, { day: '2026-11-05', color: 'green' }), { ok: true })
 
-    await setLeftOn(db, groupId, grace.id, '2026-11-10')
+    await setLeftOn(db, groupId, grace.id, '2026-11-11')
     assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-12', color: 'green' }), {
       ok: false,
       failure: 'outside_membership',
     })
-    assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-10', color: 'green' }), { ok: true })
+    assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-11', color: 'green' }), { ok: true })
 
     assert.deepEqual(await logCheckIn(db, outsider, groupId, { day: '2026-11-05', color: 'green' }), {
       ok: false,
@@ -131,7 +131,7 @@ test('a day before joining or after leaving is rejected', async () => {
     assert.deepEqual(
       (await listCheckIns(db, groupId)).map((item) => [item.displayName, item.day]),
       [
-        ['Grace', '2026-11-10'],
+        ['Grace', '2026-11-11'],
         ['Lin', '2026-11-05'],
       ],
     )
@@ -175,22 +175,22 @@ test('the group card logs a day and lists who logged what', async () => {
     assert.equal(saved.headers.get('location'), groupPath)
     const replaced = await post(base, checkInPath, adaCookie, fields({ day: '2026-11-03', color: 'red' }))
     assert.equal(replaced.status, 303)
-    const graceSaved = await post(base, checkInPath, graceCookie, fields({ day: '2026-11-04', color: 'green' }))
+    const graceSaved = await post(base, checkInPath, graceCookie, fields({ day: '2026-11-05', color: 'green' }))
     assert.equal(graceSaved.status, 303)
 
     const after = await (await fetch(`${base}${groupPath}`, { headers: { cookie: graceCookie } })).text()
     const list = after.slice(after.indexOf('<ul class="check-ins">'))
     assert.match(
       list,
-      /swatch green[\s\S]*Grace <time datetime="2026-11-04">2026-11-04<\/time>[\s\S]*Green[\s\S]*swatch red[\s\S]*Ada <time datetime="2026-11-03">2026-11-03<\/time>[\s\S]*Red/,
+      /swatch green[\s\S]*Grace <time datetime="2026-11-05">2026-11-05<\/time>[\s\S]*Green[\s\S]*swatch red[\s\S]*Ada <time datetime="2026-11-03">2026-11-03<\/time>[\s\S]*Red/,
     )
     assert.doesNotMatch(list, /swatch green[^<]*<\/span> <span class="member-name">Ada/)
 
-    const offDay = await post(base, checkInPath, graceCookie, fields({ day: '2026-11-05', color: 'green' }))
+    const offDay = await post(base, checkInPath, graceCookie, fields({ day: '2026-11-04', color: 'green' }))
     assert.equal(offDay.status, 400)
     const offHtml = await offDay.text()
     assert.match(offHtml, /That day is not one of your logging days\./)
-    assert.match(offHtml, /value="2026-11-05"/)
+    assert.match(offHtml, /value="2026-11-04"/)
 
     const stranger = await post(base, checkInPath, outsiderCookie, fields({ day: '2026-11-03', color: 'green' }))
     assert.equal(stranger.status, 403)
@@ -204,7 +204,7 @@ test('the group card logs a day and lists who logged what', async () => {
       (await readCheckIns(db, groupId)).map((item) => [item.userId, item.day, item.color]).sort(),
       [
         [ada.id, '2026-11-03', 'red'],
-        [grace.id, '2026-11-04', 'green'],
+        [grace.id, '2026-11-05', 'green'],
       ].sort(),
     )
   } finally {

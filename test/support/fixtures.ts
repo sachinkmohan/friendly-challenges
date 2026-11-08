@@ -44,11 +44,6 @@ export async function setLeftOn(db: Database, groupId: GroupId, userId: string, 
   await groupRef(db, groupId).update(new FieldPath('members', userId, 'leftOn'), day)
 }
 
-// Stands in for data written before a rule existed, which the app has to cope with on read.
-export async function setChallengeDates(db: Database, groupId: GroupId, startsOn: string, endsOn: string): Promise<void> {
-  await groupRef(db, groupId).update('challenge.startsOn', startsOn, 'challenge.endsOn', endsOn)
-}
-
 export async function cookieFor(db: Database, account: Account): Promise<string> {
   return `session=${encodeURIComponent(await createSession(db, account.id))}`
 }

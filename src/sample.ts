@@ -38,9 +38,9 @@ const pantry: GroupDoc = {
     cause: null,
   },
   rhythms: {
-    [ADA]: { kind: 'every_day', anchorOn: '2026-10-01' },
-    [BEA]: { kind: 'every_2_days', anchorOn: '2026-10-01' },
-    [CAM]: { kind: 'every_3_days', anchorOn: '2026-10-02' },
+    [ADA]: { kind: 'every_day' },
+    [BEA]: { kind: 'every_2_days' },
+    [CAM]: { kind: 'every_3_days' },
   },
 }
 
@@ -56,8 +56,9 @@ const checkIns: CheckInDoc[] = [
   { userId: BEA, day: '2026-10-03', color: 'red' },
   { userId: BEA, day: '2026-10-05', color: 'green' },
   { userId: BEA, day: '2026-10-07', color: 'green' },
-  { userId: CAM, day: '2026-10-02', color: 'green' },
-  { userId: CAM, day: '2026-10-05', color: 'green' },
+  { userId: CAM, day: '2026-10-01', color: 'green' },
+  { userId: CAM, day: '2026-10-04', color: 'green' },
+  { userId: CAM, day: '2026-10-07', color: 'green' },
 ]
 
 const payment: PaymentDoc = {

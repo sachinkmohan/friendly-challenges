@@ -238,14 +238,14 @@ async function handleGroup(
 type ChallengeRoute = Extract<GroupRoute, { kind: 'save_challenge' | 'start_challenge' | 'save_rhythm' }>
 
 function challengeStatus(failure: ChallengeFailure): number {
-  if (failure === 'not_member') return 403
+  if (failure === 'not_member' || failure === 'not_creator') return 403
   if (failure === 'group_missing') return 404
   if (
     failure === 'frozen' ||
     failure === 'no_challenge' ||
     failure === 'outside_headcount' ||
     failure === 'cause_for_group' ||
-    failure === 'rhythm_past_end'
+    failure === 'rhythms_missing'
   ) {
     return 409
   }
@@ -389,10 +389,7 @@ async function postChallenge(
     await finishChallenge(res, origin, route.groupId, viewer.account, deps, saved, { draft: input })
     return
   }
-  const rhythm: RhythmInput = {
-    interval: form.get('interval') ?? '',
-    anchorOn: form.get('anchor_on') ?? '',
-  }
+  const rhythm: RhythmInput = { interval: form.get('interval') ?? '' }
   const saved = await saveRhythm(deps.db, viewer.account, route.groupId, rhythm)
   await finishChallenge(res, origin, route.groupId, viewer.account, deps, saved, { rhythmDraft: rhythm })
 }
