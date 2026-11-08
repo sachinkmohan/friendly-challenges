@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { FieldValue } from 'firebase-admin/firestore'
 import { test } from 'node:test'
 import { saveChallenge, saveRhythm, startChallenge, type IsoDate, type RhythmKind } from '../src/challenge.ts'
 import { listCheckIns, logCheckIn } from '../src/checkins.ts'
@@ -6,7 +7,7 @@ import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
 import { joinGroup, parseGroupId, type GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
 import { safeReturnPath } from '../src/page.ts'
-import { readCheckIns } from '../src/store.ts'
+import { groupRef, readCheckIns } from '../src/store.ts'
 import { CHECK_IN_TODAY, closeServer, cookieFor, groupWith, listen, person, post, setJoinedOn, setLeftOn } from './support/fixtures.ts'
 
 type Crew = { db: Database; ada: Account; grace: Account; lin: Account; groupId: GroupId }
@@ -151,6 +152,36 @@ test('members in the group at the start log from the start date, and a late join
         ['Ada', '2026-11-01', 'green'],
       ],
     )
+  } finally {
+    await closeDatabase(db)
+  }
+})
+
+test('a challenge started before join dates moved at Start counts its active members from the start date', async () => {
+  const { db, ada, grace, groupId } = await activeCrew()
+  try {
+    await groupRef(db, groupId).update({ 'challenge.joinsFromStart': FieldValue.delete() })
+    await setJoinedOn(db, groupId, '2026-11-06', [ada.id])
+    assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-02', color: 'green' }, CHECK_IN_TODAY), {
+      ok: true,
+      day: '2026-11-02',
+      color: 'green',
+      previous: null,
+    })
+
+    await groupRef(db, groupId).update({ 'challenge.joinsFromStart': true })
+    assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-03', color: 'green' }, CHECK_IN_TODAY), {
+      ok: false,
+      failure: 'outside_membership',
+    })
+
+    await setLeftOn(db, groupId, grace.id, '2026-11-04')
+    await setJoinedOn(db, groupId, '2026-11-03', [grace.id])
+    await groupRef(db, groupId).update({ 'challenge.joinsFromStart': FieldValue.delete() })
+    assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-01', color: 'green' }, CHECK_IN_TODAY), {
+      ok: false,
+      failure: 'outside_membership',
+    })
   } finally {
     await closeDatabase(db)
   }

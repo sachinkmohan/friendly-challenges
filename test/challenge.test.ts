@@ -271,6 +271,7 @@ test('one member starts a solo challenge owed to a cause and two to five start o
       endsOn: '2026-11-30',
       phase: 'active',
       cause: 'Food bank',
+      joinsFromStart: true,
     })
     assert.deepEqual(await startChallenge(db, ada, solo, { cause: 'Somewhere else' }), { ok: true, name: 'No sweets' })
     assert.deepEqual(await startChallenge(db, ada, solo, noCause), { ok: true, name: 'No sweets' })
@@ -721,10 +722,10 @@ test('a started challenge stored before causes reads as one with no cause, and a
   const db = openTestDatabase()
   try {
     const legacy = await storedChallenge(db, { ...storedTerms, phase: 'active' })
-    assert.deepEqual((await readGroup(db, legacy))?.challenge, { ...storedTerms, phase: 'active', cause: null })
+    assert.deepEqual((await readGroup(db, legacy))?.challenge, { ...storedTerms, phase: 'active', cause: null, joinsFromStart: false })
 
     const solo = await storedChallenge(db, { ...storedTerms, phase: 'active', cause: 'Food bank' })
-    assert.deepEqual((await readGroup(db, solo))?.challenge, { ...storedTerms, phase: 'active', cause: 'Food bank' })
+    assert.deepEqual((await readGroup(db, solo))?.challenge, { ...storedTerms, phase: 'active', cause: 'Food bank', joinsFromStart: false })
 
     const draft = await storedChallenge(db, { ...storedTerms, phase: 'draft' })
     assert.deepEqual((await readGroup(db, draft))?.challenge, { ...storedTerms, phase: 'draft' })

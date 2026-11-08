@@ -13,4 +13,4 @@ We will move each active member's `joinedOn` back to the start date when the cha
 
 ## Consequences
 
-Next agent reads `joinedOn` as the first day a member is in the challenge, not the day they tapped Join. Groups that started before this change keep the later join dates, so their members cannot log those early days until `scripts/backfill-start-joins.ts --apply <groupId>` moves the join dates back. A request crafted by hand can log tomorrow in UTC.
+Next agent reads `joinedOn` as the first day a member is in the challenge, not the day they tapped Join. Start also sets `challenge.joinsFromStart`. A started challenge without it began before this change, so `parseGroup` reads its active members as joined on the start date and leaves the stored dates alone. That includes anyone who really joined such a group after it started, who then owes stakes from the start date. A request crafted by hand can log tomorrow in UTC.

@@ -36,6 +36,7 @@ const pantry: GroupDoc = {
     endsOn: '2026-10-07',
     phase: 'active',
     cause: null,
+    joinsFromStart: true,
   },
   rhythms: {
     [ADA]: { kind: 'every_day' },
