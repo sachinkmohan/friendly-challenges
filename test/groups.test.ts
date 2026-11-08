@@ -288,25 +288,25 @@ test('nobody joins a solo challenge once it has started, and a group challenge s
   try {
     const [ada, grace, lin, noor] = await Promise.all(['Ada', 'Grace', 'Lin', 'Noor'].map((name) => person(db, name)))
     const solo = await groupWith(db, [ada], 'Alone')
-    assert.deepEqual(await saveChallenge(db, ada, solo, soloTerms), { ok: true })
-    assert.deepEqual(await saveRhythm(db, ada, solo, { interval: 'every_day' }), { ok: true })
-    assert.deepEqual(await startChallenge(db, ada, solo, { cause: 'Food bank' }), { ok: true })
+    assert.deepEqual(await saveChallenge(db, ada, solo, soloTerms), { ok: true, name: 'No sweets' })
+    assert.deepEqual(await saveRhythm(db, ada, solo, { interval: 'every_day' }), { ok: true, rhythm: 'every_day' })
+    assert.deepEqual(await startChallenge(db, ada, solo, { cause: 'Food bank' }), { ok: true, name: 'No sweets' })
     assert.deepEqual(await joinGroup(db, grace, solo), { ok: false, failure: 'solo_started' })
     assert.deepEqual(Object.keys((await readGroup(db, solo))?.members ?? {}), [ada.id])
-    assert.deepEqual(await joinGroup(db, ada, solo), { ok: true, groupId: solo })
+    assert.deepEqual(await joinGroup(db, ada, solo), { ok: true, groupId: solo, name: 'Alone' })
     assert.equal((await viewGroup(db, grace, solo)).kind, 'solo')
     assert.equal((await viewGroup(db, null, solo)).kind, 'solo')
     assert.equal((await viewGroup(db, ada, solo)).kind, 'members')
 
     const draft = await groupWith(db, [ada], 'Not yet')
-    assert.deepEqual(await saveChallenge(db, ada, draft, soloTerms), { ok: true })
-    assert.deepEqual(await joinGroup(db, grace, draft), { ok: true, groupId: draft })
+    assert.deepEqual(await saveChallenge(db, ada, draft, soloTerms), { ok: true, name: 'No sweets' })
+    assert.deepEqual(await joinGroup(db, grace, draft), { ok: true, groupId: draft, name: 'Not yet' })
 
     const group = await groupWith(db, [ada, grace, lin], 'Group')
-    assert.deepEqual(await saveChallenge(db, ada, group, soloTerms), { ok: true })
-    for (const who of [ada, grace, lin]) assert.deepEqual(await saveRhythm(db, who, group, { interval: 'every_day' }), { ok: true })
-    assert.deepEqual(await startChallenge(db, ada, group, { cause: '' }), { ok: true })
-    assert.deepEqual(await joinGroup(db, noor, group), { ok: true, groupId: group })
+    assert.deepEqual(await saveChallenge(db, ada, group, soloTerms), { ok: true, name: 'No sweets' })
+    for (const who of [ada, grace, lin]) assert.deepEqual(await saveRhythm(db, who, group, { interval: 'every_day' }), { ok: true, rhythm: 'every_day' })
+    assert.deepEqual(await startChallenge(db, ada, group, { cause: '' }), { ok: true, name: 'No sweets' })
+    assert.deepEqual(await joinGroup(db, noor, group), { ok: true, groupId: group, name: 'Group' })
   } finally {
     await closeDatabase(db)
   }
@@ -319,9 +319,9 @@ test('the join page of a started solo challenge says nobody can join it', async 
   const { server, base } = await listen(db)
   try {
     const groupId = await groupWith(db, [ada], 'Alone')
-    assert.deepEqual(await saveChallenge(db, ada, groupId, soloTerms), { ok: true })
-    assert.deepEqual(await saveRhythm(db, ada, groupId, { interval: 'every_day' }), { ok: true })
-    assert.deepEqual(await startChallenge(db, ada, groupId, { cause: 'Food bank' }), { ok: true })
+    assert.deepEqual(await saveChallenge(db, ada, groupId, soloTerms), { ok: true, name: 'No sweets' })
+    assert.deepEqual(await saveRhythm(db, ada, groupId, { interval: 'every_day' }), { ok: true, rhythm: 'every_day' })
+    assert.deepEqual(await startChallenge(db, ada, groupId, { cause: 'Food bank' }), { ok: true, name: 'No sweets' })
     const groupPath = `/groups/${groupId}`
     const copy = /This is a solo challenge that has already started, so nobody can join it\./
 

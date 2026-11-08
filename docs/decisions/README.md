@@ -13,4 +13,5 @@ These records follow the template at <https://kcd-slides-bwk-adrs-for-agents.pag
 - [0009 We will allow solo challenges owed to a cause](0009-allow-solo-challenges-owed-to-a-cause.md). Accepted.
 - [0010 We will let only the creator set and start a challenge](0010-let-the-creator-run-the-challenge.md). Accepted.
 - [0011 We will let the creator delete a group for everyone](0011-let-the-creator-delete-a-group.md). Accepted.
-- [0012 We will count members from the start date and stop logging at tomorrow](0012-count-members-from-the-start-date.md). Accepted.
+- [0012 We will confirm actions with a one-time toast carried in a cookie](0012-confirm-actions-with-a-one-time-toast.md). Accepted.
+- [0013 We will count members from the start date and stop logging at tomorrow](0013-count-members-from-the-start-date.md). Accepted.

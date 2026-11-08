@@ -148,12 +148,12 @@ test('nets follow check-ins and payments with nothing stored between reads', asy
     assert.equal(total(first), 0)
 
     for (const day of ['2026-11-01', '2026-11-02', '2026-11-03']) {
-      assert.deepEqual(await logCheckIn(db, ada, groupId, { day, color: 'red' }, CHECK_IN_TODAY), { ok: true })
+      assert.deepEqual(await logCheckIn(db, ada, groupId, { day, color: 'red' }, CHECK_IN_TODAY), { ok: true, day, color: 'red', previous: null })
     }
     assert.deepEqual(netsOf(await ledger(db, groupId, '2026-11-04')), netsOf(first))
 
     for (const day of ['2026-11-01', '2026-11-02', '2026-11-03']) {
-      assert.deepEqual(await logCheckIn(db, ada, groupId, { day, color: 'green' }, CHECK_IN_TODAY), { ok: true })
+      assert.deepEqual(await logCheckIn(db, ada, groupId, { day, color: 'green' }, CHECK_IN_TODAY), { ok: true, day, color: 'green', previous: 'red' })
     }
     const green = await ledger(db, groupId, '2026-11-04')
     assert.deepEqual(netsOf(green), { [ada.id]: 2000, [grace.id]: 500, [lin.id]: -2500 })
@@ -166,7 +166,7 @@ test('nets follow check-ins and payments with nothing stored between reads', asy
       { payeeId: ada.id, amount: '15.00', paidOn: '2026-11-04', paypalRef: ' 9XY12345AB6789012 ' },
       iso('2026-11-04'),
     )
-    assert.deepEqual(paid, { ok: true })
+    assert.deepEqual(paid, { ok: true, amountMinor: 1500, currency: 'USD', minorDigits: 2, payeeName: 'Ada' })
     const after = await ledger(db, groupId, '2026-11-04')
     assert.deepEqual(netsOf(after), { [ada.id]: 500, [grace.id]: 500, [lin.id]: -1000 })
     assert.equal(total(after), 0)
@@ -195,7 +195,7 @@ test('a payment needs another member, a real past date, an amount in the currenc
     assert.deepEqual(await pay(ada, { paidOn: '2026-11-05' }), { ok: false, failure: 'future_date' })
     assert.deepEqual(await pay(ada, { paypalRef: 'x'.repeat(65) }), { ok: false, failure: 'ref_too_long' })
     assert.deepEqual(await pay(await person(db, 'Noor'), {}), { ok: false, failure: 'not_member' })
-    assert.deepEqual(await pay(ada, { amount: '0.01' }), { ok: true })
+    assert.deepEqual(await pay(ada, { amount: '0.01' }), { ok: true, amountMinor: 1, currency: 'USD', minorDigits: 2, payeeName: 'Grace' })
     const stored = await readPayments(db, groupId)
     assert.deepEqual(
       stored.map((row) => ({ amountMinor: row.amountMinor, currency: row.currency, paypalRef: row.paypalRef })),
@@ -224,10 +224,15 @@ test('a payment is always in the challenge currency and can go to a member who l
   const { db, ada, grace, lin, groupId } = await crew()
   const today = iso('2026-11-04')
   try {
-    assert.deepEqual(await recordDropout(db, lin, groupId, { memberId: lin.id, lastDay: '2026-11-02' }, today), { ok: true })
+    assert.deepEqual(await recordDropout(db, lin, groupId, { memberId: lin.id, lastDay: '2026-11-02' }, today), {
+      ok: true,
+      groupName: 'Morning run',
+      memberName: 'Lin',
+      lastDay: '2026-11-02',
+    })
     const pay = (who: Account, payeeId: string) =>
       recordPayment(db, who, groupId, { payeeId, amount: '2.50', paidOn: '2026-11-04', paypalRef: '' }, today)
-    assert.deepEqual(await pay(ada, lin.id), { ok: true })
+    assert.deepEqual(await pay(ada, lin.id), { ok: true, amountMinor: 250, currency: 'USD', minorDigits: 2, payeeName: 'Lin' })
     assert.deepEqual(await pay(lin, ada.id), { ok: false, failure: 'not_member' })
     assert.deepEqual(await pay(grace, grace.id), { ok: false, failure: 'bad_payee' })
     const stored = await readPayments(db, groupId)
@@ -386,13 +391,19 @@ test('a solo member owes the cause for each missed day and records payments to i
     assert.deepEqual(first.member, { userId: ada.id, displayName: 'Ada' })
     assert.deepEqual([first.owedMinor, first.paidMinor, first.dueMinor], [1500, 0, 1500])
 
-    assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-02', color: 'green' }, CHECK_IN_TODAY), { ok: true })
+    assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-02', color: 'green' }, CHECK_IN_TODAY), { ok: true, day: '2026-11-02', color: 'green', previous: null })
     assert.deepEqual((await soloLedger(db, groupId, '2026-11-04')).owedMinor, 1000)
 
     assert.deepEqual(await pay({ payeeId: ada.id }), { ok: false, failure: 'bad_payee' })
     assert.deepEqual(await pay({ payeeId: 'nobody' }), { ok: false, failure: 'bad_payee' })
     assert.deepEqual(await pay({ amount: '0' }), { ok: false, failure: 'amount_not_positive' })
-    assert.deepEqual(await pay({ amount: '4', paidOn: '2026-11-03', paypalRef: ' receipt 12 ' }), { ok: true })
+    assert.deepEqual(await pay({ amount: '4', paidOn: '2026-11-03', paypalRef: ' receipt 12 ' }), {
+      ok: true,
+      amountMinor: 400,
+      currency: 'USD',
+      minorDigits: 2,
+      payeeName: 'Food bank',
+    })
     const stored = await readPayments(db, groupId)
     assert.deepEqual(
       stored.map((row) => [row.payerId, row.payee, row.amountMinor, row.currency, row.paidOn, row.paypalRef]),
@@ -405,7 +416,7 @@ test('a solo member owes the cause for each missed day and records payments to i
       [['Ada', { kind: 'cause' }, 'Food bank', 400]],
     )
 
-    assert.deepEqual(await pay({ amount: '10' }), { ok: true })
+    assert.deepEqual(await pay({ amount: '10' }), { ok: true, amountMinor: 1000, currency: 'USD', minorDigits: 2, payeeName: 'Food bank' })
     const ahead = await soloLedger(db, groupId, '2026-11-04')
     assert.deepEqual([ahead.owedMinor, ahead.paidMinor, ahead.dueMinor], [1000, 1400, -400])
   } finally {

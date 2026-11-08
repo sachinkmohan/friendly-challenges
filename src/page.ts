@@ -64,7 +64,15 @@ function tabBar(homeHref: string, accountHref: string): string {
   </nav>`
 }
 
-const frame = (screens: string, tabs: string) => `<!doctype html>
+function toastRegion(text: string | null): string {
+  if (text === null) return ''
+  return `<div class="toast" role="status" aria-live="polite">
+          <p>${escapeHtml(text)}</p>
+          <button class="toast-close" type="button" aria-label="Dismiss" hidden>&times;</button>
+        </div>`
+}
+
+const frame = (screens: string, tabs: string, toast: string | null = null) => `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -96,6 +104,7 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
       box-shadow: 0 30px 80px rgba(28, 25, 21, 0.35);
     }
     .phone {
+      position: relative;
       height: 100%;
       display: flex;
       flex-direction: column;
@@ -353,6 +362,47 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
       opacity: 0.35;
     }
     :focus-visible { outline: 2px solid #1c1915; outline-offset: 2px; }
+    .toast {
+      position: absolute;
+      top: 64px;
+      left: 12px;
+      right: 12px;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 8px 12px 16px;
+      border-radius: 14px;
+      background: #1c1915;
+      color: #fffdf8;
+      font-size: 15px;
+      box-shadow: 0 10px 30px rgba(28, 25, 21, 0.3);
+    }
+    .toast p { flex: 1; margin: 0; color: inherit; }
+    .toast-close {
+      flex: none;
+      width: 32px;
+      height: 32px;
+      min-height: 0;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .toast-close[hidden] { display: none; }
+    .toast .toast-close:focus-visible { outline-color: #fffdf8; }
+    @media (prefers-reduced-motion: no-preference) {
+      .toast { animation: toast-in 200ms ease-out; }
+      @keyframes toast-in {
+        from { opacity: 0; transform: translateY(-8px); }
+      }
+    }
     @media (max-width: 500px), (max-height: 500px) {
       html, body, .stage { height: auto; overflow: visible; }
       body { background: #efeae1; }
@@ -360,6 +410,7 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
       .device { width: 100%; height: auto; padding: 0; border-radius: 0; box-shadow: none; }
       .phone { height: auto; min-height: 100dvh; overflow: visible; border-radius: 0; }
       .appbar { position: sticky; top: 0; z-index: 1; }
+      .toast { position: fixed; }
       .screens { overflow: visible; }
       .tabbar { position: sticky; bottom: 0; }
       .indicator { display: none; }
@@ -373,6 +424,7 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
         <header class="appbar">
           <h1>Friendly challenges</h1>
         </header>
+        ${toastRegion(toast)}
         <main class="screens">
           ${screens}
         </main>
@@ -408,6 +460,13 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
     window.addEventListener('popstate', applyScreen)
     window.addEventListener('hashchange', applyScreen)
     applyScreen()
+    document.querySelectorAll('.toast').forEach(function (toast) {
+      var close = toast.querySelector('.toast-close')
+      var hide = function () { toast.remove() }
+      close.hidden = false
+      close.addEventListener('click', hide)
+      setTimeout(hide, 4000)
+    })
   </script>
   <script type="module">
     const forms = document.querySelectorAll('form.sign-in')
@@ -698,12 +757,12 @@ function signedInScreens(account: Account, groups: readonly HomeGroup[], heatmap
   `
 }
 
-export function renderHome(page: HomePage): string {
+export function renderHome(page: HomePage, toast: string | null = null): string {
   const screens = page.state === 'signed_out' ? signedOutScreens(page) : signedInScreens(page.account, page.groups, page.heatmaps)
-  return frame(screens, tabBar('#home', '#account'))
+  return frame(screens, tabBar('#home', '#account'), toast)
 }
 
-function groupCard(body: string): string {
+function groupCard(body: string, toast: string | null = null): string {
   const screens = `
     <section class="screen is-current">
       <article class="card">
@@ -711,7 +770,7 @@ function groupCard(body: string): string {
       </article>
     </section>
   `
-  return frame(screens, tabBar('/', '/#account'))
+  return frame(screens, tabBar('/', '/#account'), toast)
 }
 
 export function renderNewGroup(viewer: Viewer, error?: 'name_empty' | 'name_too_long'): string {
@@ -1177,20 +1236,22 @@ export function renderGroup(
   viewer: Viewer,
   origin: string,
   attempt?: ChallengeAttempt,
+  toast: string | null = null,
 ): string {
   const title = `<h2>${escapeHtml(view.name)}</h2>`
   const count = `<p class="count">${activeCountText(view.activeCount)}</p>`
   const failure = failureParagraph(attempt)
   if (view.kind === 'full') {
-    return groupCard(`${title}${count}${failure}${headlineText(view.headline)}<p>This group is full.</p>`)
+    return groupCard(`${title}${count}${failure}${headlineText(view.headline)}<p>This group is full.</p>`, toast)
   }
   if (view.kind === 'solo') {
     return groupCard(
       `${title}${count}${failure}${headlineText(view.headline)}<p>This is a solo challenge that has already started, so nobody can join it.</p>`,
+      toast,
     )
   }
   if (view.kind === 'preview') {
-    return groupCard(`${title}${count}${failure}${headlineText(view.headline)}${joinControl(view.groupId, viewer)}`)
+    return groupCard(`${title}${count}${failure}${headlineText(view.headline)}${joinControl(view.groupId, viewer)}`, toast)
   }
   const challenge = view.challenge
   const userId = viewer.state === 'signed_in' ? viewer.account.id : ''
@@ -1227,7 +1288,7 @@ export function renderGroup(
     ${dropoutForm(view, userId, attempt?.dropoutDraft)}
     ${deleteForm(view, userId)}
     <p class="share">Share this link to invite someone. <a href="${share}">${share}</a></p>
-  `)
+  `, toast)
 }
 
 export function renderFailure(failure: AuthFailure): string {

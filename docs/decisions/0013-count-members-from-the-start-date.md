@@ -1,4 +1,4 @@
-# 0012: We will count members from the start date and stop logging at tomorrow
+# 0013: We will count members from the start date and stop logging at tomorrow
 
 - **Status:** accepted
 - **Date:** 2026-11-08

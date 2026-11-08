@@ -87,13 +87,13 @@ test('the member or the group creator records a dropout and anyone else cannot',
     assert.deepEqual(await drop(ada, grace.id, '2026-11-07'), { ok: false, failure: 'future_day' })
     assert.deepEqual(await leftOn(db, groupId), { [ada.id]: null, [grace.id]: null, [lin.id]: null })
 
-    assert.deepEqual(await drop(lin, lin.id, '2026-11-04'), { ok: true })
-    assert.deepEqual(await drop(ada, grace.id, '2026-11-06'), { ok: true })
+    assert.deepEqual(await drop(lin, lin.id, '2026-11-04'), { ok: true, groupName: 'Morning run', memberName: 'Lin', lastDay: '2026-11-04' })
+    assert.deepEqual(await drop(ada, grace.id, '2026-11-06'), { ok: true, groupName: 'Morning run', memberName: 'Grace', lastDay: '2026-11-06' })
     assert.deepEqual(await leftOn(db, groupId), { [ada.id]: null, [grace.id]: '2026-11-06', [lin.id]: '2026-11-04' })
 
     assert.deepEqual(await drop(ada, lin.id, '2026-11-05'), { ok: false, failure: 'bad_member' })
     assert.deepEqual(await drop(lin, lin.id, '2026-11-05'), { ok: false, failure: 'not_member' })
-    assert.deepEqual(await drop(ada, ada.id, '2026-11-01'), { ok: true })
+    assert.deepEqual(await drop(ada, ada.id, '2026-11-01'), { ok: true, groupName: 'Morning run', memberName: 'Ada', lastDay: '2026-11-01' })
     assert.deepEqual(await recordDropout(db, ada, crypto.randomUUID() as GroupId, { memberId: ada.id, lastDay: '2026-11-01' }, today), {
       ok: false,
       failure: 'group_missing',
@@ -122,13 +122,16 @@ test('debts through the last day stay and later days owe the leaver nothing and 
   ]
   try {
     for (const [who, day, color] of days) {
-      assert.deepEqual(await logCheckIn(db, who, groupId, { day, color }, CHECK_IN_TODAY), { ok: true })
+      assert.deepEqual(await logCheckIn(db, who, groupId, { day, color }, CHECK_IN_TODAY), { ok: true, day, color, previous: null })
     }
     const before = await ledger(db, groupId)
     assert.deepEqual(netsOf(before), { [ada.id]: 500, [grace.id]: 2000, [lin.id]: -2500 })
 
     assert.deepEqual(await recordDropout(db, lin, groupId, { memberId: lin.id, lastDay: '2026-11-03' }, today), {
       ok: true,
+      groupName: 'Morning run',
+      memberName: 'Lin',
+      lastDay: '2026-11-03',
     })
     const after = await ledger(db, groupId)
     assert.deepEqual(netsOf(after), { [ada.id]: 0, [grace.id]: 1500, [lin.id]: -1500 })
@@ -158,13 +161,23 @@ test('a dropout can leave fewer than 3 active and frees a seat in a full group',
     )
     if (!ada || !grace || !lin || !noor || !omar || !priya || !quinn) throw new Error('people')
     const small = await group(db, ada, [grace, lin])
-    assert.deepEqual(await recordDropout(db, ada, small, { memberId: lin.id, lastDay: '2026-11-02' }, today), { ok: true })
+    assert.deepEqual(await recordDropout(db, ada, small, { memberId: lin.id, lastDay: '2026-11-02' }, today), {
+      ok: true,
+      groupName: 'Morning run',
+      memberName: 'Lin',
+      lastDay: '2026-11-02',
+    })
     const smallView = await viewGroup(db, ada, small)
     assert.equal(smallView.kind === 'members' ? smallView.activeCount : null, 2)
 
     const full = await group(db, ada, [grace, lin, noor, omar])
     assert.deepEqual(await joinGroup(db, priya, full), { ok: false, failure: 'group_full' })
-    assert.deepEqual(await recordDropout(db, omar, full, { memberId: omar.id, lastDay: '2026-11-05' }, today), { ok: true })
+    assert.deepEqual(await recordDropout(db, omar, full, { memberId: omar.id, lastDay: '2026-11-05' }, today), {
+      ok: true,
+      groupName: 'Morning run',
+      memberName: 'Omar',
+      lastDay: '2026-11-05',
+    })
     const joins = await Promise.all([joinGroup(db, priya, full), joinGroup(db, quinn, full)])
     assert.equal(joins.filter((joined) => joined.ok).length, 1)
     assert.deepEqual(joins.find((joined) => !joined.ok), { ok: false, failure: 'group_full' })

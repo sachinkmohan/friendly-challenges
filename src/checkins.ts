@@ -2,7 +2,7 @@ import type { Database } from './db.ts'
 import { memberIsDue, parseIsoDate, rhythmFrom, spanFrom, utcOrdinal, windowFrom, type IsoDate, type MembershipSpan } from './challenge.ts'
 import type { GroupId } from './groups.ts'
 import type { Account } from './identity.ts'
-import { checkInRef, compare, memberOf, readCheckIns, readGroup, readUsers, rhythmOf, type CheckInDoc } from './store.ts'
+import { checkInRef, compare, memberOf, parseCheckIn, readCheckIns, readGroup, readUsers, rhythmOf, type CheckInDoc } from './store.ts'
 
 export const CHECK_IN_LABELS = {
   green: 'Green',
@@ -42,7 +42,9 @@ export const checkInFailureCopy = {
   not_due: 'That day is not one of your logging days.',
 } as const satisfies Record<CheckInFailure, string>
 
-export type LogCheckInResult = { readonly ok: true } | { readonly ok: false; readonly failure: CheckInFailure }
+export type LogCheckInResult =
+  | { readonly ok: true; readonly day: IsoDate; readonly color: CheckInColor; readonly previous: CheckInColor | null }
+  | { readonly ok: false; readonly failure: CheckInFailure }
 
 class CheckInRejected extends Error {
   readonly failure: CheckInFailure
@@ -62,6 +64,11 @@ function hasBegun(day: IsoDate, today: IsoDate): boolean {
   return utcOrdinal(day) <= utcOrdinal(today) + 1
 }
 
+function colorOf(checkIn: CheckInDoc): CheckInColor {
+  if (!isColor(checkIn.color)) throw new Error('check-in')
+  return checkIn.color
+}
+
 function withinSpan(span: MembershipSpan, day: IsoDate): boolean {
   return day >= span.joinedOn && (span.leftOn === null || day <= span.leftOn)
 }
@@ -79,7 +86,7 @@ export async function logCheckIn(
   if (!isColor(input.color)) return { ok: false, failure: 'bad_color' }
   const checkIn: CheckInDoc = { userId: account.id, day, color: input.color }
   try {
-    await db.runTransaction(async (tx) => {
+    const previous = await db.runTransaction(async (tx): Promise<CheckInColor | null> => {
       const group = await readGroup(db, groupId, tx)
       if (!group) throw new CheckInRejected('group_missing')
       const span = spanFrom(memberOf(group, account.id))
@@ -87,9 +94,12 @@ export async function logCheckIn(
       if (!withinSpan(span, day)) throw new CheckInRejected('outside_membership')
       const rhythm = rhythmFrom(rhythmOf(group, account.id))
       if (!memberIsDue(windowFrom(group.challenge), span, rhythm, day)) throw new CheckInRejected('not_due')
-      tx.set(checkInRef(db, groupId, account.id, day), checkIn)
+      const ref = checkInRef(db, groupId, account.id, day)
+      const existing = await tx.get(ref)
+      tx.set(ref, checkIn)
+      return existing.exists ? colorOf(parseCheckIn(existing.data())) : null
     })
-    return { ok: true }
+    return { ok: true, day, color: input.color, previous }
   } catch (error) {
     if (error instanceof CheckInRejected) return { ok: false, failure: error.failure }
     throw error
