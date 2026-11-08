@@ -233,10 +233,6 @@ export type SaveRhythmResult =
         | 'frozen'
     }
 
-export type ReadChallengeResult =
-  | { readonly ok: false; readonly failure: 'group_missing' | 'not_member' }
-  | { readonly ok: true; readonly card: MemberChallengeCard }
-
 export type RhythmSlot =
   | { readonly mode: 'open'; readonly rhythm: Rhythm | null }
   | { readonly mode: 'first' }
@@ -688,16 +684,4 @@ export function memberChallengeFrom(group: GroupDoc): MemberChallengeCard {
     return { phase: 'draft', terms: stored.terms, minorDigits: stored.minorDigits, cap, start, checks, missingRhythms, currencies, rhythms }
   }
   return { phase: 'active', terms: stored.terms, minorDigits: stored.minorDigits, stakesGo: stored.stakesGo, rhythms }
-}
-
-export async function readChallengeHeadline(db: Database, groupId: GroupId): Promise<ChallengeHeadline | null> {
-  const group = await readGroup(db, groupId)
-  return group ? challengeHeadlineFrom(group) : null
-}
-
-export async function readMemberChallenge(db: Database, account: Account, groupId: GroupId): Promise<ReadChallengeResult> {
-  const group = await readGroup(db, groupId)
-  if (!group) return { ok: false, failure: 'group_missing' }
-  if (!isActiveMember(group, account.id)) return { ok: false, failure: 'not_member' }
-  return { ok: true, card: memberChallengeFrom(group) }
 }

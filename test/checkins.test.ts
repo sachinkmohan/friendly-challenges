@@ -2,13 +2,14 @@ import assert from 'node:assert/strict'
 import { FieldValue } from 'firebase-admin/firestore'
 import { test } from 'node:test'
 import { saveChallenge, saveRhythm, startChallenge, type IsoDate, type RhythmKind } from '../src/challenge.ts'
-import { listCheckIns, logCheckIn } from '../src/checkins.ts'
+import { logCheckIn } from '../src/checkins.ts'
 import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
 import { joinGroup, parseGroupId, type GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
 import { safeReturnPath } from '../src/page.ts'
 import { groupRef, readCheckIns } from '../src/store.ts'
 import { CHECK_IN_TODAY, closeServer, cookieFor, groupWith, listen, person, post, setJoinedOn, setLeftOn } from './support/fixtures.ts'
+import { listCheckIns } from './support/reads.ts'
 
 type Crew = { db: Database; ada: Account; grace: Account; lin: Account; groupId: GroupId }
 

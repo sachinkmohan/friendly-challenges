@@ -1,6 +1,6 @@
 import { stakesGoFrom } from './challenge.ts'
 import type { Database } from './db.ts'
-import { ACTIVE_MEMBER_CAP, activeMemberIds, compare, groupRef, memberOf, parseGroup, readGroup, readUsers, utcToday, type GroupDoc, type UserDoc } from './store.ts'
+import { ACTIVE_MEMBER_CAP, activeMemberIds, compare, groupRef, memberOf, parseGroup, readGroup, utcToday, type GroupDoc, type UserDoc } from './store.ts'
 import type { Account } from './identity.ts'
 
 export type GroupId = string & { readonly brand: 'GroupId' }
@@ -175,18 +175,6 @@ export function groupViewFrom(
   if (isStartedSolo(group)) return { kind: 'solo', groupId, name: group.name, activeCount }
   if (activeCount >= ACTIVE_MEMBER_CAP) return { kind: 'full', groupId, name: group.name, activeCount }
   return { kind: 'preview', groupId, name: group.name, activeCount }
-}
-
-export async function viewGroup(
-  db: Database,
-  account: Account | null,
-  groupId: GroupId,
-): Promise<GroupView> {
-  const group = await readGroup(db, groupId)
-  if (!group) return { kind: 'missing' }
-  const active = activeMemberIds(group)
-  const users = account && active.includes(account.id) ? await readUsers(db, active) : new Map<string, UserDoc>()
-  return groupViewFrom(groupId, group, account?.id ?? null, users)
 }
 
 export async function listHomeGroups(db: Database, account: Account): Promise<readonly HomeGroup[]> {

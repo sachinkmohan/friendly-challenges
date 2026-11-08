@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { readLedger, type Ledger } from '../src/balances.ts'
+import type { Ledger } from '../src/balances.ts'
 import { utcToday } from '../src/calendar.ts'
 import { parseIsoDate } from '../src/challenge.ts'
 import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
@@ -10,6 +10,7 @@ import { loadSample, SAMPLE_OPEN_DEBT_MINOR } from '../src/sample.ts'
 import { createSession } from '../src/sessions.ts'
 import { checkInRef } from '../src/store.ts'
 import { closeServer, listen, setLeftOn } from './support/fixtures.ts'
+import { readLedger } from './support/reads.ts'
 
 const sampleSource = readFileSync(new URL('../src/sample.ts', import.meta.url), 'utf8')
 const comment = /Expected open debt as of (\d{4}-\d{2}-\d{2}), in minor units: (\d+)/.exec(sampleSource)

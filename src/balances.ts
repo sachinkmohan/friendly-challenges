@@ -23,9 +23,7 @@ import {
   memberOf,
   paymentData,
   paymentRef,
-  readCheckIns,
   readGroup,
-  readPayments,
   readUsers,
   rhythmOf,
   type CheckInDoc,
@@ -388,14 +386,6 @@ export function ledgerFrom(
       : [],
   )
   return { kind: 'group', ...base, people, ...settle(people, debts, lines) }
-}
-
-export async function readLedger(db: Database, groupId: GroupId, today: IsoDate): Promise<Ledger | null> {
-  const group = await readGroup(db, groupId)
-  if (!group || !activeTerms(group)) return null
-  const [checkIns, payments] = await Promise.all([readCheckIns(db, groupId), readPayments(db, groupId)])
-  const users = await readUsers(db, [...Object.keys(group.members), ...paymentUserIds(payments)])
-  return ledgerFrom(group, { checkIns, payments }, users, today)
 }
 
 function parsePaypalRef(raw: string): { ok: true; ref: string | null } | { ok: false } {
