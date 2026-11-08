@@ -25,7 +25,7 @@ export type MemberDoc = {
   readonly leftOn: Day | null
 }
 
-export type ChallengeDoc = {
+type TermsFields = {
   readonly name: string
   readonly typeKind: string
   readonly customLabel: string | null
@@ -33,8 +33,11 @@ export type ChallengeDoc = {
   readonly stakeMinor: number
   readonly startsOn: Day
   readonly endsOn: Day
-  readonly phase: 'draft' | 'active'
 }
+
+export type ChallengeDoc =
+  | (TermsFields & { readonly phase: 'draft' })
+  | (TermsFields & { readonly phase: 'active'; readonly cause: string | null })
 
 export type RhythmDoc = {
   readonly kind: string
@@ -56,9 +59,11 @@ export type CheckInDoc = {
   readonly color: string
 }
 
+export type Payee = { readonly kind: 'member'; readonly userId: string } | { readonly kind: 'cause' }
+
 export type PaymentDoc = {
   readonly payerId: string
-  readonly payeeId: string
+  readonly payee: Payee
   readonly amountMinor: number
   readonly currency: string
   readonly paidOn: Day
@@ -69,7 +74,6 @@ export type PaymentDoc = {
 export type PaymentRow = PaymentDoc & { readonly id: string }
 
 export const ACTIVE_MEMBER_CAP = 5
-export const CHALLENGE_MEMBER_FLOOR = 3
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/
 
@@ -105,7 +109,7 @@ function parseChallenge(raw: unknown): ChallengeDoc {
   const row = record(raw, 'challenge')
   if (row.phase !== 'draft' && row.phase !== 'active') throw new Error('challenge phase')
   if (typeof row.stakeMinor !== 'number' || !Number.isInteger(row.stakeMinor)) throw new Error('challenge stake')
-  return {
+  const terms: TermsFields = {
     name: text(row.name, 'challenge name'),
     typeKind: text(row.typeKind, 'challenge type'),
     customLabel: nullable(row.customLabel, (v) => text(v, 'challenge label')),
@@ -113,8 +117,10 @@ function parseChallenge(raw: unknown): ChallengeDoc {
     stakeMinor: row.stakeMinor,
     startsOn: day(row.startsOn, 'challenge start'),
     endsOn: day(row.endsOn, 'challenge end'),
-    phase: row.phase,
   }
+  const cause = nullable(row.cause, (v) => text(v, 'challenge cause'))
+  if (row.phase === 'draft') return cause === null ? { ...terms, phase: 'draft' } : fail('challenge cause')
+  return { ...terms, phase: 'active', cause }
 }
 
 function parseRhythm(raw: unknown): RhythmDoc {
@@ -155,18 +161,29 @@ export function parseCheckIn(raw: unknown): CheckInDoc {
   return { userId: text(row.userId, 'check-in user'), day: day(row.day, 'check-in day'), color: text(row.color, 'check-in color') }
 }
 
+// On disk a null payeeId is the challenge's cause, so payments written before causes read unchanged.
+function parsePayee(raw: unknown): Payee {
+  if (raw === null) return { kind: 'cause' }
+  return { kind: 'member', userId: text(raw, 'payment payee') }
+}
+
 export function parsePayment(raw: unknown): PaymentDoc {
   const row = record(raw, 'payment')
   if (typeof row.amountMinor !== 'number' || !Number.isSafeInteger(row.amountMinor)) throw new Error('payment amount')
   return {
     payerId: text(row.payerId, 'payment payer'),
-    payeeId: text(row.payeeId, 'payment payee'),
+    payee: parsePayee(row.payeeId),
     amountMinor: row.amountMinor,
     currency: text(row.currency, 'payment currency'),
     paidOn: day(row.paidOn, 'payment day'),
     paypalRef: nullable(row.paypalRef, (v) => text(v, 'payment reference')),
     createdAt: row.createdAt instanceof Timestamp ? row.createdAt : fail('payment created'),
   }
+}
+
+export function paymentData(payment: PaymentDoc): { readonly [field: string]: unknown } {
+  const { payee, ...rest } = payment
+  return { ...rest, payeeId: payee.kind === 'member' ? payee.userId : null }
 }
 
 export function isActive(member: MemberDoc): boolean {

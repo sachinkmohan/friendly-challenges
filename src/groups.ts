@@ -1,3 +1,4 @@
+import { stakesGoFrom } from './challenge.ts'
 import type { Database } from './db.ts'
 import { ACTIVE_MEMBER_CAP, activeMemberIds, compare, groupRef, parseGroup, readGroup, readUsers, utcToday, type GroupDoc } from './store.ts'
 import type { Account } from './identity.ts'
@@ -16,9 +17,11 @@ export type CreateGroupResult =
   | { ok: true; groupId: GroupId }
   | { ok: false; failure: 'name_empty' | 'name_too_long' }
 
+type JoinFailure = 'group_missing' | 'group_full' | 'solo_started'
+
 export type JoinResult =
   | { ok: true; groupId: GroupId }
-  | { ok: false; failure: 'group_missing' | 'group_full' }
+  | { ok: false; failure: JoinFailure }
 
 export type MemberLine = {
   userId: string
@@ -39,6 +42,7 @@ export type GroupView =
     }
   | { kind: 'preview'; groupId: GroupId; name: string; activeCount: number }
   | { kind: 'full'; groupId: GroupId; name: string; activeCount: number }
+  | { kind: 'solo'; groupId: GroupId; name: string; activeCount: number }
 
 export type HomeGroup = {
   groupId: GroupId
@@ -63,10 +67,14 @@ function newGroupId(): GroupId {
   return id
 }
 
-class JoinRejected extends Error {
-  readonly failure: 'group_missing' | 'group_full'
+function isStartedSolo(group: GroupDoc): boolean {
+  return stakesGoFrom(group.challenge)?.kind === 'cause'
+}
 
-  constructor(failure: 'group_missing' | 'group_full') {
+class JoinRejected extends Error {
+  readonly failure: JoinFailure
+
+  constructor(failure: JoinFailure) {
     super(failure)
     this.failure = failure
   }
@@ -99,6 +107,7 @@ export async function joinGroup(db: Database, account: Account, groupId: GroupId
       const group = await readGroup(db, groupId, tx)
       if (!group) throw new JoinRejected('group_missing')
       if (group.members[account.id]) return
+      if (isStartedSolo(group)) throw new JoinRejected('solo_started')
       if (activeMemberIds(group).length >= ACTIVE_MEMBER_CAP) throw new JoinRejected('group_full')
       tx.update(groupRef(db, groupId), {
         memberIds: [...group.memberIds, account.id],
@@ -135,6 +144,7 @@ export async function viewGroup(
       )
     return { kind: 'members', groupId, name: group.name, activeCount, creatorId: group.createdBy, members }
   }
+  if (isStartedSolo(group)) return { kind: 'solo', groupId, name: group.name, activeCount }
   if (activeCount >= ACTIVE_MEMBER_CAP) return { kind: 'full', groupId, name: group.name, activeCount }
   return { kind: 'preview', groupId, name: group.name, activeCount }
 }

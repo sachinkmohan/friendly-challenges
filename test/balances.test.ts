@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict'
+import { Timestamp } from 'firebase-admin/firestore'
 import { test } from 'node:test'
-import { missedDayDebts, readLedger, recordPayment, settle, type Ledger } from '../src/balances.ts'
-import type { CalendarMember } from '../src/calendar.ts'
+import { missedDayDebts, readLedger, recordPayment, settle, soloDue, type GroupLedger, type SoloLedger } from '../src/balances.ts'
+import { buildCalendar, type CalendarMember } from '../src/calendar.ts'
 import { parseIsoDate, saveChallenge, saveRhythm, startChallenge, type IsoDate } from '../src/challenge.ts'
 import { logCheckIn } from '../src/checkins.ts'
 import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
 import { recordDropout } from '../src/dropouts.ts'
 import type { GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
-import { readPayments } from '../src/store.ts'
+import { paymentRef, readPayments } from '../src/store.ts'
 import { closeServer, cookieFor, groupWith, listen, person, setJoinedOn } from './support/fixtures.ts'
 
 function iso(raw: string): IsoDate {
@@ -121,15 +122,21 @@ async function crew(options: { start?: boolean } = {}): Promise<Crew> {
     if (!rhythm.ok) throw new Error(rhythm.failure)
   }
   if (options.start !== false) {
-    const started = await startChallenge(db, ada, groupId)
+    const started = await startChallenge(db, ada, groupId, { cause: '' })
     if (!started.ok) throw new Error(started.failure)
   }
   return { db, ada, grace, lin, groupId }
 }
 
-async function ledger(db: Database, groupId: GroupId, today: string): Promise<Ledger> {
+async function ledger(db: Database, groupId: GroupId, today: string): Promise<GroupLedger> {
   const read = await readLedger(db, groupId, iso(today))
-  if (!read) throw new Error('ledger')
+  if (read?.kind !== 'group') throw new Error('ledger')
+  return read
+}
+
+async function soloLedger(db: Database, groupId: GroupId, today: string): Promise<SoloLedger> {
+  const read = await readLedger(db, groupId, iso(today))
+  if (read?.kind !== 'solo') throw new Error('solo ledger')
   return read
 }
 
@@ -225,8 +232,8 @@ test('a payment is always in the challenge currency and can go to a member who l
     assert.deepEqual(await pay(grace, grace.id), { ok: false, failure: 'bad_payee' })
     const stored = await readPayments(db, groupId)
     assert.deepEqual(
-      stored.map((row) => [row.payerId, row.payeeId, row.amountMinor, row.currency]),
-      [[ada.id, lin.id, 250, 'USD']],
+      stored.map((row) => [row.payerId, row.payee, row.amountMinor, row.currency]),
+      [[ada.id, { kind: 'member', userId: lin.id }, 250, 'USD']],
     )
   } finally {
     await closeDatabase(db)
@@ -279,6 +286,191 @@ test('the group card shows each net and who owes whom, and a recorded payment ch
     })
     assert.equal(signedOut.status, 401)
     assert.equal((await fetch(`${base}${groupPath}/payment`, { headers: { cookie: linCookie } })).status, 405)
+  } finally {
+    await closeServer(server)
+    await closeDatabase(db)
+  }
+})
+
+test('a stored payment with no payee id is a payment to the cause, and one with no payee field is refused', async () => {
+  const db = openTestDatabase()
+  const groupId = '00000000-0000-4000-8000-000000000043'
+  const stored = (payeeId: unknown) => ({
+    payerId: 'ada',
+    ...(payeeId === undefined ? {} : { payeeId }),
+    amountMinor: 500,
+    currency: 'USD',
+    paidOn: '2026-11-03',
+    paypalRef: null,
+    createdAt: Timestamp.fromDate(new Date('2026-11-03T12:00:00Z')),
+  })
+  try {
+    await paymentRef(db, groupId, 'to-grace').set(stored('grace'))
+    await paymentRef(db, groupId, 'to-cause').set(stored(null))
+    const rows = await readPayments(db, groupId)
+    assert.deepEqual(
+      rows.map((row) => [row.id, row.payee]).sort(),
+      [
+        ['to-cause', { kind: 'cause' }],
+        ['to-grace', { kind: 'member', userId: 'grace' }],
+      ],
+    )
+    await paymentRef(db, groupId, 'no-payee').set(stored(undefined))
+    await assert.rejects(readPayments(db, groupId))
+  } finally {
+    await closeDatabase(db)
+  }
+})
+
+test('a solo member owes the cause one stake per red day, less what they paid it', () => {
+  const ada = member('ada', '2026-11-01', { '2026-11-01': 'red', '2026-11-02': 'green', '2026-11-03': 'red' })
+  const calendar = buildCalendar({ window, today: iso('2026-11-05') }, [ada])
+  const cause = { kind: 'cause' } as const
+  assert.deepEqual(soloDue(calendar, 'ada', 500, []), { owedMinor: 1500, paidMinor: 0, dueMinor: 1500 })
+  assert.deepEqual(
+    soloDue(calendar, 'ada', 500, [
+      { payee: cause, amountMinor: 400 },
+      { payee: cause, amountMinor: 100 },
+    ]),
+    { owedMinor: 1500, paidMinor: 500, dueMinor: 1000 },
+  )
+  assert.deepEqual(soloDue(calendar, 'ada', 500, [{ payee: cause, amountMinor: 2000 }]), {
+    owedMinor: 1500,
+    paidMinor: 2000,
+    dueMinor: -500,
+  })
+})
+
+test('a solo member owes the cause only for their own red days', () => {
+  const ada = member('ada', '2026-11-01', {
+    '2026-11-01': 'red',
+    '2026-11-02': 'green',
+    '2026-11-03': 'green',
+    '2026-11-04': 'green',
+  })
+  const bea = member('bea', '2026-11-01', { '2026-11-01': 'red', '2026-11-02': 'red' }, '2026-11-02')
+  const calendar = buildCalendar({ window, today: iso('2026-11-05') }, [ada, bea])
+  assert.equal(soloDue(calendar, 'ada', 500, []).owedMinor, 500)
+})
+
+async function soloCrew(): Promise<{ db: Database; ada: Account; groupId: GroupId }> {
+  const db = openTestDatabase()
+  const ada = await person(db, 'Ada')
+  const groupId = await groupWith(db, [ada], 'Alone')
+  await setJoinedOn(db, groupId, '2026-11-01')
+  const saved = await saveChallenge(db, ada, groupId, {
+    name: 'No sweets',
+    type: 'no_sugar',
+    customLabel: '',
+    currency: 'USD',
+    stake: '5',
+    startsOn: '2026-11-01',
+    endsOn: '2026-11-30',
+  })
+  if (!saved.ok) throw new Error(saved.failure)
+  const rhythm = await saveRhythm(db, ada, groupId, { interval: 'every_day', anchorOn: '2026-11-01' })
+  if (!rhythm.ok) throw new Error(rhythm.failure)
+  const started = await startChallenge(db, ada, groupId, { cause: 'Food bank' })
+  if (!started.ok) throw new Error(started.failure)
+  return { db, ada, groupId }
+}
+
+test('a solo member owes the cause for each missed day and records payments to it', async () => {
+  const { db, ada, groupId } = await soloCrew()
+  const today = iso('2026-11-04')
+  const pay = (input: Partial<Parameters<typeof recordPayment>[3]>) =>
+    recordPayment(db, ada, groupId, { payeeId: '', amount: '1', paidOn: '2026-11-04', paypalRef: '', ...input }, today)
+  try {
+    const first = await soloLedger(db, groupId, '2026-11-04')
+    assert.equal(first.cause, 'Food bank')
+    assert.deepEqual(first.member, { userId: ada.id, displayName: 'Ada' })
+    assert.deepEqual([first.owedMinor, first.paidMinor, first.dueMinor], [1500, 0, 1500])
+
+    assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-02', color: 'green' }), { ok: true })
+    assert.deepEqual((await soloLedger(db, groupId, '2026-11-04')).owedMinor, 1000)
+
+    assert.deepEqual(await pay({ payeeId: ada.id }), { ok: false, failure: 'bad_payee' })
+    assert.deepEqual(await pay({ payeeId: 'nobody' }), { ok: false, failure: 'bad_payee' })
+    assert.deepEqual(await pay({ amount: '0' }), { ok: false, failure: 'amount_not_positive' })
+    assert.deepEqual(await pay({ amount: '4', paidOn: '2026-11-03', paypalRef: ' receipt 12 ' }), { ok: true })
+    const stored = await readPayments(db, groupId)
+    assert.deepEqual(
+      stored.map((row) => [row.payerId, row.payee, row.amountMinor, row.currency, row.paidOn, row.paypalRef]),
+      [[ada.id, { kind: 'cause' }, 400, 'USD', '2026-11-03', 'receipt 12']],
+    )
+    const paid = await soloLedger(db, groupId, '2026-11-04')
+    assert.deepEqual([paid.owedMinor, paid.paidMinor, paid.dueMinor], [1000, 400, 600])
+    assert.deepEqual(
+      paid.payments.map((item) => [item.payerName, item.payee, item.payeeName, item.amountMinor]),
+      [['Ada', { kind: 'cause' }, 'Food bank', 400]],
+    )
+
+    assert.deepEqual(await pay({ amount: '10' }), { ok: true })
+    const ahead = await soloLedger(db, groupId, '2026-11-04')
+    assert.deepEqual([ahead.owedMinor, ahead.paidMinor, ahead.dueMinor], [1000, 1400, -400])
+  } finally {
+    await closeDatabase(db)
+  }
+})
+
+test('a group payment still needs a member payee and never goes to a cause', async () => {
+  const { db, ada, groupId } = await crew()
+  try {
+    const result = await recordPayment(
+      db,
+      ada,
+      groupId,
+      { payeeId: '', amount: '1', paidOn: '2026-11-04', paypalRef: '' },
+      iso('2026-11-04'),
+    )
+    assert.deepEqual(result, { ok: false, failure: 'bad_payee' })
+    assert.deepEqual(await readPayments(db, groupId), [])
+  } finally {
+    await closeDatabase(db)
+  }
+})
+
+test('the solo card shows what the member owes the cause and a payment to it without picking a payee', async () => {
+  const { db, ada, groupId } = await soloCrew()
+  const cookie = await cookieFor(db, ada)
+  const { server, base } = await listen(db, { today: () => iso('2026-11-04') })
+  const groupPath = `/groups/${groupId}`
+  const page = async () => (await fetch(`${base}${groupPath}`, { headers: { cookie } })).text()
+  const pay = (fields: Record<string, string>) =>
+    fetch(`${base}${groupPath}/payment`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(fields).toString(),
+    })
+  try {
+    const before = await page()
+    assert.match(before, /data-due="1500"/)
+    assert.match(before, /Ada<\/span> <span class="net owes">owes Food bank 15\.00 USD<\/span>/)
+    assert.doesNotMatch(before, /Who owes whom/)
+    assert.doesNotMatch(before, /name="payee"/)
+    assert.match(before, /Paid to Food bank/)
+    assert.match(before, /<label for="payment-ref">Reference \(optional\)<\/label>/)
+    assert.match(before, /name="paypal_ref"/)
+
+    const bad = await pay({ amount: '0', paid_on: '2026-11-04', paypal_ref: 'r1' })
+    assert.equal(bad.status, 400)
+    const badHtml = await bad.text()
+    assert.match(badHtml, /Type an amount above zero\./)
+    assert.match(badHtml, /name="paypal_ref" value="r1"/)
+
+    const ok = await pay({ amount: '15', paid_on: '2026-11-03', paypal_ref: 'r1' })
+    assert.equal(ok.status, 303)
+    const even = await page()
+    assert.match(even, /data-due="0"/)
+    assert.match(even, /Ada<\/span> <span class="net even">is even with Food bank<\/span>/)
+    assert.match(even, /Ada paid Food bank 15\.00 USD <time datetime="2026-11-03">/)
+    assert.match(even, /Reference r1/)
+
+    assert.equal((await pay({ amount: '2.5', paid_on: '2026-11-04', paypal_ref: '' })).status, 303)
+    const ahead = await page()
+    assert.match(ahead, /data-due="-250"/)
+    assert.match(ahead, /Ada<\/span> <span class="net owed">has paid Food bank 2\.50 USD ahead<\/span>/)
   } finally {
     await closeServer(server)
     await closeDatabase(db)

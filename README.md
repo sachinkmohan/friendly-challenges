@@ -40,7 +40,9 @@ Sign in. Choose **Create a group** and type a name. You are the first member. Th
 
 Open that link while signed in as someone else. Choose **Join group**. A sixth person cannot join. The page says the group is full.
 
-On the group page, name the challenge, pick the type, the currency, and the stake per day. The stake is the amount in that currency, and the app stores the minor units. Each member picks how often they log and an anchor date. The choices are every day, every 2 days, every 3 days, and alternate days. **Start challenge** appears when 3 to 5 people are active. After the start, the shared terms stay as they are. A member who has not picked a rhythm can still save one. A saved rhythm stays put.
+On the group page, name the challenge, pick the type, the currency, and the stake per day. The stake is the amount in that currency, and the app stores the minor units. Each member picks how often they log and an anchor date. The choices are every day, every 2 days, every 3 days, and alternate days. **Start challenge** appears when 1 to 5 people are active. After the start, the shared terms stay as they are. A member who has not picked a rhythm can still save one. A saved rhythm stays put.
+
+You can also start on your own. With one active member, Start asks who your missed days are owed to. That name is the cause, and the challenge is a solo challenge. The cause stays as it is after the start. Nobody can join a solo challenge once it has started. Its invite link says so. A challenge that starts with 2 or more people has no cause, and others can still join it until 5 are active.
 
 ## Check-ins
 
@@ -60,6 +62,8 @@ Between two people, the app nets the debts in both directions, then subtracts re
 
 To record a payment you already made outside the app, choose **Paid to**, the amount in the challenge currency, the date, and an optional PayPal reference. Choose **Record payment**. The app never calls PayPal. The date cannot be in the future.
 
+In a solo challenge, each red day owes the stake to the cause instead. The card shows what you owe the cause, less what you have paid it. To record a payment you made to the cause, type the amount, the date, and an optional reference, then choose **Record payment**.
+
 Nothing is stored as a running total. The app works out the balances from check-ins, membership dates, and payments each time the page loads. When you change a red day to green, that day's debts go away.
 
 ## Dropout
@@ -68,7 +72,7 @@ A member can leave. On the group card, pick the member and their last day, then 
 
 Debts on days through the last day stay. The member who left still owes for their misses on those days, and others still owe them for theirs. Days after the last day create no debts for that member in either direction. Their calendar row stays, with blank days after the last day, and they cannot log those days.
 
-After a dropout the group can have fewer than 3 active members. The leaver no longer counts toward the cap of 5, so someone else can join.
+The leaver no longer counts toward the cap of 5, so someone else can join, unless the challenge is solo. If everyone else drops out of a challenge that started with 2 or more people, the last member's missed days cost nothing. It does not become a solo challenge.
 
 ## Sample
 

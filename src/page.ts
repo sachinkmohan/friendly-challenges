@@ -1,4 +1,12 @@
-import { paymentFailureCopy, type Ledger, type Payment, type PaymentFailure, type PaymentInput } from './balances.ts'
+import {
+  paymentFailureCopy,
+  type GroupLedger,
+  type Ledger,
+  type Payment,
+  type PaymentFailure,
+  type PaymentInput,
+  type SoloLedger,
+} from './balances.ts'
 import {
   challengeFailureCopy,
   formatMinor,
@@ -15,6 +23,8 @@ import {
   type Rhythm,
   type RhythmInput,
   type RhythmLine,
+  type StakesGo,
+  type StartKind,
 } from './challenge.ts'
 import { DAY_MARK_LABELS, type GroupCalendar, type Heatmap, type MarkedDay } from './calendar.ts'
 import { dropoutFailureCopy, type DropoutFailure, type DropoutInput } from './dropouts.ts'
@@ -670,6 +680,7 @@ export type ChallengeAttempt = {
   dropoutDraft?: DropoutInput
   draft?: ChallengeInput
   rhythmDraft?: RhythmInput
+  causeDraft?: string
   checkInDay?: string
 }
 
@@ -687,8 +698,8 @@ function typeLabel(type: ChallengeType): string {
   return type.kind === 'custom' ? type.label : PRESET_LABELS[type.preset]
 }
 
-function headcountSentence(floor: number, cap: number): string {
-  return `A challenge can start when ${floor} to ${cap} people are active.`
+function headcountSentence(cap: number): string {
+  return `A challenge can start when 1 to ${cap} people are active.`
 }
 
 function failureParagraph(attempt?: ChallengeAttempt): string {
@@ -754,13 +765,19 @@ function termsFromDraft(draft: ChallengeInput): TermValues {
   }
 }
 
-function termsText(terms: ChallengeTerms, minorDigits: number): string {
+function stakesGoText(stakesGo: StakesGo | null): string {
+  if (stakesGo?.kind !== 'cause') return ''
+  return `<p>Missed days are owed to ${escapeHtml(stakesGo.name)}.</p>`
+}
+
+function termsText(terms: ChallengeTerms, minorDigits: number, stakesGo: StakesGo | null): string {
   const start = escapeHtml(terms.startsOn)
   const end = escapeHtml(terms.endsOn)
   return `<p>${escapeHtml(terms.name)}</p>
     <p>${escapeHtml(typeLabel(terms.type))}</p>
     <p><time datetime="${start}">${start}</time> to <time datetime="${end}">${end}</time></p>
-    <p>${escapeHtml(formatStake(terms.stakeMinor, minorDigits))} ${escapeHtml(terms.currency)}</p>`
+    <p>${escapeHtml(formatStake(terms.stakeMinor, minorDigits))} ${escapeHtml(terms.currency)}</p>
+    ${stakesGoText(stakesGo)}`
 }
 
 function termsForm(groupId: GroupId, currencies: readonly string[], values: TermValues): string {
@@ -859,7 +876,7 @@ function money(ledger: Ledger, minor: number): string {
   return `${formatMinor(minor, ledger.minorDigits)} ${ledger.currency}`
 }
 
-function netItem(ledger: Ledger, line: Ledger['nets'][number]): string {
+function netItem(ledger: GroupLedger, line: GroupLedger['nets'][number]): string {
   const name = escapeHtml(line.displayName)
   const amount = escapeHtml(money(ledger, Math.abs(line.netMinor)))
   const sign = line.netMinor > 0 ? 'owed' : line.netMinor < 0 ? 'owes' : 'even'
@@ -868,18 +885,29 @@ function netItem(ledger: Ledger, line: Ledger['nets'][number]): string {
   return `<li data-net="${escapeHtml(line.userId)}" data-minor="${line.netMinor}"><span class="member-name">${name}</span> <span class="net ${sign}">${text}</span></li>`
 }
 
-function openItem(ledger: Ledger, line: Ledger['open'][number]): string {
+function openItem(ledger: GroupLedger, line: GroupLedger['open'][number]): string {
   const amount = escapeHtml(money(ledger, line.amountMinor))
   return `<li data-open="${escapeHtml(line.debtorId)}:${escapeHtml(line.creditorId)}" data-minor="${line.amountMinor}">${escapeHtml(line.debtorName)} owes ${escapeHtml(line.creditorName)} ${amount}</li>`
 }
 
 function paymentItem(ledger: Ledger, payment: Payment): string {
   const when = escapeHtml(payment.paidOn)
-  const ref = payment.paypalRef ? ` <span class="count">PayPal ${escapeHtml(payment.paypalRef)}</span>` : ''
+  const refLabel = ledger.kind === 'solo' ? 'Reference' : 'PayPal'
+  const ref = payment.paypalRef ? ` <span class="count">${refLabel} ${escapeHtml(payment.paypalRef)}</span>` : ''
   return `<li><span class="member-name">${escapeHtml(payment.payerName)} paid ${escapeHtml(payment.payeeName)} ${escapeHtml(money(ledger, payment.amountMinor))} <time datetime="${when}">${when}</time></span>${ref}</li>`
 }
 
-function paymentForm(groupId: GroupId, ledger: Ledger, userId: string, draft: PaymentInput | undefined): string {
+function paymentFields(ledger: Ledger, draft: PaymentInput | undefined, refLabel: string): string {
+  return `<label for="payment-amount">Amount in ${escapeHtml(ledger.currency)}</label>
+      <input id="payment-amount" name="amount" value="${escapeHtml(draft?.amount ?? '')}" inputmode="decimal" autocomplete="off" required>
+      <label for="payment-date">Date paid</label>
+      <input id="payment-date" name="paid_on" type="date" value="${escapeHtml(draft?.paidOn ?? '')}" required>
+      <label for="payment-ref">${refLabel} (optional)</label>
+      <input id="payment-ref" name="paypal_ref" value="${escapeHtml(draft?.paypalRef ?? '')}" autocomplete="off">
+      <button type="submit">Record payment</button>`
+}
+
+function paymentForm(groupId: GroupId, ledger: GroupLedger, userId: string, draft: PaymentInput | undefined): string {
   const others = ledger.people.filter((person) => person.userId !== userId)
   if (others.length === 0) return ''
   const action = escapeHtml(`${groupHref(groupId)}${paymentSuffix}`)
@@ -892,27 +920,44 @@ function paymentForm(groupId: GroupId, ledger: Ledger, userId: string, draft: Pa
       <p>The app does not send money. Record a payment that already happened.</p>
       <label for="payment-payee">Paid to</label>
       <select id="payment-payee" name="payee">${payees}</select>
-      <label for="payment-amount">Amount in ${escapeHtml(ledger.currency)}</label>
-      <input id="payment-amount" name="amount" value="${escapeHtml(draft?.amount ?? '')}" inputmode="decimal" autocomplete="off" required>
-      <label for="payment-date">Date paid</label>
-      <input id="payment-date" name="paid_on" type="date" value="${escapeHtml(draft?.paidOn ?? '')}" required>
-      <label for="payment-ref">PayPal reference (optional)</label>
-      <input id="payment-ref" name="paypal_ref" value="${escapeHtml(draft?.paypalRef ?? '')}" autocomplete="off">
-      <button type="submit">Record payment</button>
+      ${paymentFields(ledger, draft, 'PayPal reference')}
     </form>`
 }
 
-function balancesSection(groupId: GroupId, ledger: Ledger, userId: string, draft: PaymentInput | undefined): string {
+function paymentList(ledger: Ledger): string {
+  if (ledger.payments.length === 0) return ''
+  return `<p class="check-ins-title">Payments</p><ul class="check-ins payments">${ledger.payments.map((item) => paymentItem(ledger, item)).join('')}</ul>`
+}
+
+function soloBalances(groupId: GroupId, ledger: SoloLedger, draft: PaymentInput | undefined): string {
+  const name = escapeHtml(ledger.member.displayName)
+  const cause = escapeHtml(ledger.cause)
+  const amount = escapeHtml(money(ledger, Math.abs(ledger.dueMinor)))
+  const sign = ledger.dueMinor > 0 ? 'owes' : ledger.dueMinor < 0 ? 'owed' : 'even'
+  const text =
+    sign === 'owes' ? `owes ${cause} ${amount}` : sign === 'owed' ? `has paid ${cause} ${amount} ahead` : `is even with ${cause}`
+  const due = `<ul class="check-ins balances"><li data-due="${ledger.dueMinor}"><span class="member-name">${name}</span> <span class="net ${sign}">${text}</span></li></ul>`
+  const action = escapeHtml(`${groupHref(groupId)}${paymentSuffix}`)
+  const form = `<form method="post" action="${action}">
+      <p class="grid-title">Record a payment you made</p>
+      <p>The app does not send money. Record a payment that already happened.</p>
+      <p>Paid to ${cause}</p>
+      ${paymentFields(ledger, draft, 'Reference')}
+    </form>`
+  return `<p class="check-ins-title">Balance</p>${due}${form}${paymentList(ledger)}`
+}
+
+function groupBalances(groupId: GroupId, ledger: GroupLedger, userId: string, draft: PaymentInput | undefined): string {
   const nets = `<ul class="check-ins balances">${ledger.nets.map((line) => netItem(ledger, line)).join('')}</ul>`
   const open =
     ledger.open.length === 0
       ? '<p>Nobody owes anyone.</p>'
       : `<ul class="check-ins open-amounts">${ledger.open.map((line) => openItem(ledger, line)).join('')}</ul>`
-  const payments =
-    ledger.payments.length === 0
-      ? ''
-      : `<p class="check-ins-title">Payments</p><ul class="check-ins payments">${ledger.payments.map((item) => paymentItem(ledger, item)).join('')}</ul>`
-  return `<p class="check-ins-title">Balances</p>${nets}<p class="check-ins-title">Who owes whom</p>${open}${paymentForm(groupId, ledger, userId, draft)}${payments}`
+  return `<p class="check-ins-title">Balances</p>${nets}<p class="check-ins-title">Who owes whom</p>${open}${paymentForm(groupId, ledger, userId, draft)}${paymentList(ledger)}`
+}
+
+function balancesSection(groupId: GroupId, ledger: Ledger, userId: string, draft: PaymentInput | undefined): string {
+  return ledger.kind === 'solo' ? soloBalances(groupId, ledger, draft) : groupBalances(groupId, ledger, userId, draft)
 }
 
 function dropoutForm(
@@ -938,10 +983,16 @@ function dropoutForm(
     </form>`
 }
 
-function startForm(groupId: GroupId, activeCount: number, floor: number, cap: number): string {
-  if (activeCount < floor || activeCount > cap) return ''
-  const action = escapeHtml(`${groupHref(groupId)}/challenge/start`)
-  return `<form method="post" action="${action}"><button type="submit">Start challenge</button></form>`
+function startForm(groupId: GroupId, start: StartKind, cause: string | undefined): string {
+  if (start === 'over_cap') return ''
+  const action = escapeHtml(`${groupHref(groupId)}${challengeStartSuffix}`)
+  if (start === 'group') return `<form method="post" action="${action}"><button type="submit">Start challenge</button></form>`
+  return `<form method="post" action="${action}">
+      <p class="field-hint">Invite friends with the link, or start on your own.</p>
+      <label for="start-cause">Who your missed days are owed to</label>
+      <input id="start-cause" name="cause" value="${escapeHtml(cause ?? '')}" autocomplete="off">
+      <button type="submit">Start challenge</button>
+    </form>`
 }
 
 function memberItem(member: MemberLine, rhythms: readonly RhythmLine[]): string {
@@ -962,12 +1013,12 @@ function joinControl(groupId: GroupId, viewer: Viewer): string {
 
 function headlineText(headline: ChallengeHeadline | null): string {
   if (!headline) return ''
-  return termsText(headline.terms, headline.minorDigits)
+  return termsText(headline.terms, headline.minorDigits, headline.stakesGo)
 }
 
 export function renderGroup(
   view:
-    | (Extract<GroupView, { kind: 'preview' | 'full' }> & { readonly headline: ChallengeHeadline | null })
+    | (Extract<GroupView, { kind: 'preview' | 'full' | 'solo' }> & { readonly headline: ChallengeHeadline | null })
     | (Extract<GroupView, { kind: 'members' }> & {
         readonly challenge: MemberChallengeCard
         readonly checkIns: readonly CheckIn[]
@@ -983,15 +1034,20 @@ export function renderGroup(
   if (view.kind === 'full') {
     return groupCard(`${title}${count}${failure}${headlineText(view.headline)}<p>This group is full.</p>`)
   }
+  if (view.kind === 'solo') {
+    return groupCard(
+      `${title}${count}${failure}${headlineText(view.headline)}<p>This is a solo challenge that has already started, so nobody can join it.</p>`,
+    )
+  }
   if (view.kind === 'preview') {
     return groupCard(`${title}${count}${failure}${headlineText(view.headline)}${joinControl(view.groupId, viewer)}`)
   }
   const challenge = view.challenge
   const range =
-    challenge.phase === 'active' ? '' : `<p>${escapeHtml(headcountSentence(challenge.floor, challenge.cap))}</p>`
+    challenge.phase === 'active' ? '' : `<p>${escapeHtml(headcountSentence(challenge.cap))}</p>`
   const terms =
     challenge.phase === 'active'
-      ? termsText(challenge.terms, challenge.minorDigits)
+      ? termsText(challenge.terms, challenge.minorDigits, challenge.stakesGo)
       : termsForm(
           view.groupId,
           challenge.currencies,
@@ -1001,8 +1057,7 @@ export function renderGroup(
               ? termsFromStored(challenge.terms, challenge.minorDigits)
               : emptyTerms,
         )
-  const start =
-    challenge.phase === 'draft' ? startForm(view.groupId, view.activeCount, challenge.floor, challenge.cap) : ''
+  const start = challenge.phase === 'draft' ? startForm(view.groupId, challenge.start, attempt?.causeDraft) : ''
   const userId = viewer.state === 'signed_in' ? viewer.account.id : ''
   const rhythm = rhythmControl(view.groupId, challenge, userId, attempt?.rhythmDraft)
   const checkIn = checkInControl(view.groupId, challenge, userId, attempt?.checkInDay)

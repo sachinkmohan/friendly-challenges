@@ -1,6 +1,6 @@
 import { Timestamp, type DocumentReference } from 'firebase-admin/firestore'
 import type { Database } from './db.ts'
-import { checkInRef, groupRef, paymentRef, userRef, type CheckInDoc, type GroupDoc, type PaymentDoc } from './store.ts'
+import { checkInRef, groupRef, paymentData, paymentRef, userRef, type CheckInDoc, type GroupDoc, type PaymentDoc } from './store.ts'
 
 // Expected open debt as of 2026-10-08, in minor units: 160
 export const SAMPLE_OPEN_DEBT_MINOR = 160
@@ -35,6 +35,7 @@ const pantry: GroupDoc = {
     startsOn: '2026-10-01',
     endsOn: '2026-10-07',
     phase: 'active',
+    cause: null,
   },
   rhythms: {
     [ADA]: { kind: 'every_day', anchorOn: '2026-10-01' },
@@ -61,7 +62,7 @@ const checkIns: CheckInDoc[] = [
 
 const payment: PaymentDoc = {
   payerId: ADA,
-  payeeId: CAM,
+  payee: { kind: 'member', userId: CAM },
   amountMinor: 40,
   currency: 'USD',
   paidOn: '2026-10-06',
@@ -78,7 +79,7 @@ export async function loadSample(db: Database): Promise<void> {
     ]),
     [groupRef(db, SAMPLE_GROUP_ID), pantry],
     ...checkIns.map((row): [DocumentReference, object] => [checkInRef(db, SAMPLE_GROUP_ID, row.userId, row.day), row]),
-    [paymentRef(db, SAMPLE_GROUP_ID, PAYMENT_ID), payment],
+    [paymentRef(db, SAMPLE_GROUP_ID, PAYMENT_ID), paymentData(payment)],
   ]
   await db.runTransaction(async (tx) => {
     const found = await tx.getAll(...docs.map(([ref]) => ref))

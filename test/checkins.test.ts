@@ -38,7 +38,7 @@ async function activeCrew(options: { start?: boolean } = {}): Promise<Crew> {
   await rhythm(db, grace, groupId, 'every_2_days', '2026-11-02')
   await rhythm(db, lin, groupId, 'every_day', '2026-11-01')
   if (options.start !== false) {
-    const started = await startChallenge(db, ada, groupId)
+    const started = await startChallenge(db, ada, groupId, { cause: '' })
     if (!started.ok) throw new Error(started.failure)
   }
   return { db, ada, grace, lin, groupId }

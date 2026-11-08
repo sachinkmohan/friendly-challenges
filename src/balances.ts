@@ -6,10 +6,13 @@ import {
   parseMinorAmount,
   rhythmFrom,
   spanFrom,
+  stakesGoFrom,
   windowFrom,
+  type CauseName,
   type CurrencyCode,
   type IsoDate,
   type MembershipSpan,
+  type StakesGo,
 } from './challenge.ts'
 import { minorDigitsOf } from './currencies.ts'
 import { isColor, type CheckInColor } from './checkins.ts'
@@ -18,6 +21,7 @@ import type { Account } from './identity.ts'
 import {
   compare,
   memberOf,
+  paymentData,
   paymentRef,
   readCheckIns,
   readGroup,
@@ -25,6 +29,7 @@ import {
   readUsers,
   rhythmOf,
   type GroupDoc,
+  type Payee,
   type PaymentDoc,
 } from './store.ts'
 
@@ -44,10 +49,13 @@ export type PaymentLine = {
   readonly amountMinor: number
 }
 
-export type Payment = PaymentLine & {
+export type Payment = {
   readonly id: string
+  readonly payerId: string
   readonly payerName: string
+  readonly payee: Payee
   readonly payeeName: string
+  readonly amountMinor: number
   readonly currency: CurrencyCode
   readonly paidOn: IsoDate
   readonly paypalRef: string | null
@@ -72,13 +80,33 @@ export type Settlement = {
   readonly open: readonly OpenAmount[]
 }
 
-export type Ledger = Settlement & {
+type LedgerBase = {
   readonly calendar: GroupCalendar
   readonly currency: CurrencyCode
   readonly minorDigits: number
-  readonly people: readonly { readonly userId: string; readonly displayName: string }[]
   readonly payments: readonly Payment[]
 }
+
+export type GroupLedger = LedgerBase &
+  Settlement & {
+    readonly kind: 'group'
+    readonly people: readonly { readonly userId: string; readonly displayName: string }[]
+  }
+
+export type SoloDue = {
+  readonly owedMinor: number
+  readonly paidMinor: number
+  readonly dueMinor: number
+}
+
+export type SoloLedger = LedgerBase &
+  SoloDue & {
+    readonly kind: 'solo'
+    readonly member: { readonly userId: string; readonly displayName: string }
+    readonly cause: CauseName
+  }
+
+export type Ledger = GroupLedger | SoloLedger
 
 export type PaymentInput = {
   readonly payeeId: string
@@ -107,7 +135,7 @@ export const paymentFailureCopy = {
   amount_too_large: `Use ${PAYMENT_MINOR_MAX} minor units or fewer.`,
   bad_date: 'Use a real date.',
   future_date: 'Record a payment that already happened.',
-  ref_too_long: `Use ${PAYPAL_REF_MAX} characters or fewer for the PayPal reference.`,
+  ref_too_long: `Use ${PAYPAL_REF_MAX} characters or fewer for the reference.`,
 } as const satisfies Record<PaymentFailure, string>
 
 export type RecordPaymentResult = { readonly ok: true } | { readonly ok: false; readonly failure: PaymentFailure }
@@ -147,6 +175,23 @@ function calendarDebts(
     }
   }
   return debts
+}
+
+export function soloDue(
+  calendar: GroupCalendar,
+  memberId: string,
+  stakeMinor: number,
+  payments: readonly Pick<Payment, 'payee' | 'amountMinor'>[],
+): SoloDue {
+  let owedMinor = 0
+  for (const marked of calendar.rows.find((row) => row.userId === memberId)?.days ?? []) {
+    if (marked.mark === 'red') owedMinor = addMinor(owedMinor, stakeMinor)
+  }
+  let paidMinor = 0
+  for (const payment of payments) {
+    if (payment.payee.kind === 'cause') paidMinor = addMinor(paidMinor, payment.amountMinor)
+  }
+  return { owedMinor, paidMinor, dueMinor: addMinor(owedMinor, -paidMinor) }
 }
 
 export function settle(
@@ -204,6 +249,7 @@ class PaymentRejected extends Error {
 }
 
 type ActiveTerms = {
+  readonly stakesGo: StakesGo
   readonly currency: CurrencyCode
   readonly minorDigits: number
   readonly stakeMinor: number
@@ -213,10 +259,12 @@ type ActiveTerms = {
 
 function activeTerms(group: GroupDoc): ActiveTerms | null {
   const window = windowFrom(group.challenge)
-  if (!group.challenge || window?.phase !== 'active') return null
+  const stakesGo = stakesGoFrom(group.challenge)
+  if (!group.challenge || window?.phase !== 'active' || !stakesGo) return null
   const minorDigits = minorDigitsOf(group.challenge.currency)
   if (minorDigits === null) throw new Error('currency')
   return {
+    stakesGo,
     currency: group.challenge.currency as CurrencyCode,
     minorDigits,
     stakeMinor: group.challenge.stakeMinor,
@@ -252,9 +300,17 @@ async function loadMembers(db: Database, groupId: GroupId, group: GroupDoc): Pro
   )
 }
 
-async function loadPayments(db: Database, groupId: GroupId): Promise<readonly Payment[]> {
+function payeeName(payee: Payee, stakesGo: StakesGo, users: ReadonlyMap<string, { readonly displayName: string }>): string | null {
+  if (payee.kind === 'member') return users.get(payee.userId)?.displayName ?? null
+  return stakesGo.kind === 'cause' ? stakesGo.name : null
+}
+
+async function loadPayments(db: Database, groupId: GroupId, stakesGo: StakesGo): Promise<readonly Payment[]> {
   const rows = await readPayments(db, groupId)
-  const users = await readUsers(db, rows.flatMap((row) => [row.payerId, row.payeeId]))
+  const users = await readUsers(
+    db,
+    rows.flatMap((row) => (row.payee.kind === 'member' ? [row.payerId, row.payee.userId] : [row.payerId])),
+  )
   return rows
     .sort(
       (a, b) =>
@@ -262,15 +318,15 @@ async function loadPayments(db: Database, groupId: GroupId): Promise<readonly Pa
     )
     .flatMap((row): Payment[] => {
       const payer = users.get(row.payerId)
-      const payee = users.get(row.payeeId)
-      if (!payer || !payee) return []
+      const payee = payeeName(row.payee, stakesGo, users)
+      if (!payer || payee === null) return []
       return [
         {
           id: row.id,
           payerId: row.payerId,
           payerName: payer.displayName,
-          payeeId: row.payeeId,
-          payeeName: payee.displayName,
+          payee: row.payee,
+          payeeName: payee,
           amountMinor: row.amountMinor,
           currency: row.currency as CurrencyCode,
           paidOn: dateFrom(row.paidOn),
@@ -286,19 +342,32 @@ export async function readLedger(db: Database, groupId: GroupId, today: IsoDate)
   const group = await readGroup(db, groupId)
   const terms = group ? activeTerms(group) : null
   if (!group || !terms) return null
-  const [members, payments] = await Promise.all([loadMembers(db, groupId, group), loadPayments(db, groupId)])
+  const [members, payments] = await Promise.all([
+    loadMembers(db, groupId, group),
+    loadPayments(db, groupId, terms.stakesGo),
+  ])
   const window = { phase: 'active', startsOn: terms.startsOn, endsOn: terms.endsOn } as const
   const calendar = buildCalendar({ window, today }, members)
+  const base = { calendar, currency: terms.currency, minorDigits: terms.minorDigits, payments }
+  if (terms.stakesGo.kind === 'cause') {
+    const member = members.find((item) => item.span.leftOn === null) ?? members.at(-1)
+    if (!member) throw new Error('solo member')
+    return {
+      kind: 'solo',
+      ...base,
+      member: { userId: member.userId, displayName: member.displayName },
+      cause: terms.stakesGo.name,
+      ...soloDue(calendar, member.userId, terms.stakeMinor, payments),
+    }
+  }
   const debts = calendarDebts(calendar, terms.stakeMinor, members)
   const people = members.map((member) => ({ userId: member.userId, displayName: member.displayName }))
-  return {
-    calendar,
-    currency: terms.currency,
-    minorDigits: terms.minorDigits,
-    people,
-    payments,
-    ...settle(people, debts, payments),
-  }
+  const lines = payments.flatMap((payment): PaymentLine[] =>
+    payment.payee.kind === 'member'
+      ? [{ payerId: payment.payerId, payeeId: payment.payee.userId, amountMinor: payment.amountMinor }]
+      : [],
+  )
+  return { kind: 'group', ...base, people, ...settle(people, debts, lines) }
 }
 
 function parsePaypalRef(raw: string): { ok: true; ref: string | null } | { ok: false } {
@@ -306,6 +375,15 @@ function parsePaypalRef(raw: string): { ok: true; ref: string | null } | { ok: f
   if (ref === '') return { ok: true, ref: null }
   if (Array.from(ref).length > PAYPAL_REF_MAX) return { ok: false }
   return { ok: true, ref }
+}
+
+function payeeOf(group: GroupDoc, account: Account, stakesGo: StakesGo, payeeId: string): Payee {
+  if (stakesGo.kind === 'cause') {
+    if (payeeId !== '') throw new PaymentRejected('bad_payee')
+    return { kind: 'cause' }
+  }
+  if (payeeId === account.id || !memberOf(group, payeeId)) throw new PaymentRejected('bad_payee')
+  return { kind: 'member', userId: payeeId }
 }
 
 export async function recordPayment(
@@ -327,21 +405,21 @@ export async function recordPayment(
       if (memberOf(group, account.id)?.leftOn !== null) throw new PaymentRejected('not_member')
       const terms = activeTerms(group)
       if (!terms) throw new PaymentRejected('not_active')
-      if (input.payeeId === account.id || !memberOf(group, input.payeeId)) throw new PaymentRejected('bad_payee')
+      const payee = payeeOf(group, account, terms.stakesGo, input.payeeId)
       const amount = parseMinorAmount(input.amount, terms.minorDigits, PAYMENT_MINOR_MAX)
       if (!amount.ok) {
         throw new PaymentRejected(amount.failure === 'too_large' ? 'amount_too_large' : 'amount_not_positive')
       }
       const payment: PaymentDoc = {
         payerId: account.id,
-        payeeId: input.payeeId,
+        payee,
         amountMinor: amount.minor,
         currency: terms.currency,
         paidOn,
         paypalRef: ref.ref,
         createdAt: Timestamp.now(),
       }
-      tx.create(paymentRef(db, groupId, crypto.randomUUID()), payment)
+      tx.create(paymentRef(db, groupId, crypto.randomUUID()), paymentData(payment))
     })
     return { ok: true }
   } catch (error) {
