@@ -6,8 +6,9 @@ import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
 import { countDocs, readGroup, utcToday } from '../src/store.ts'
 import { createSession } from '../src/sessions.ts'
 import { saveChallenge, saveRhythm, startChallenge } from '../src/challenge.ts'
-import { joinGroup, viewGroup } from '../src/groups.ts'
+import { joinGroup } from '../src/groups.ts'
 import { closeServer, cookieFor, fakeVerifier, googleToken, groupWith, listen, person } from './support/fixtures.ts'
+import { viewGroup } from './support/reads.ts'
 
 type Person = { cookie: string; userId: string }
 

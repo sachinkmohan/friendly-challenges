@@ -23,14 +23,15 @@ import {
   memberOf,
   paymentData,
   paymentRef,
-  readCheckIns,
   readGroup,
-  readPayments,
   readUsers,
   rhythmOf,
+  type CheckInDoc,
   type GroupDoc,
   type Payee,
   type PaymentDoc,
+  type PaymentRow,
+  type UserDoc,
 } from './store.ts'
 
 export const PAYMENT_MINOR_MAX = 1_000_000_000_000
@@ -287,10 +288,12 @@ function dateFrom(value: string): IsoDate {
   return parsed
 }
 
-async function loadMembers(db: Database, groupId: GroupId, group: GroupDoc): Promise<readonly CalendarMember[]> {
-  const userIds = Object.keys(group.members)
-  const [users, checkIns] = await Promise.all([readUsers(db, userIds), readCheckIns(db, groupId)])
-  const members = userIds.flatMap((userId): CalendarMember[] => {
+function membersFrom(
+  group: GroupDoc,
+  checkIns: readonly CheckInDoc[],
+  users: ReadonlyMap<string, UserDoc>,
+): readonly CalendarMember[] {
+  const members = Object.keys(group.members).flatMap((userId): CalendarMember[] => {
     const user = users.get(userId)
     const span = spanFrom(memberOf(group, userId))
     if (!user || !span) return []
@@ -313,13 +316,12 @@ function payeeName(payee: Payee, stakesGo: StakesGo, users: ReadonlyMap<string, 
   return stakesGo.kind === 'cause' ? stakesGo.name : null
 }
 
-async function loadPayments(db: Database, groupId: GroupId, stakesGo: StakesGo): Promise<readonly Payment[]> {
-  const rows = await readPayments(db, groupId)
-  const users = await readUsers(
-    db,
-    rows.flatMap((row) => (row.payee.kind === 'member' ? [row.payerId, row.payee.userId] : [row.payerId])),
-  )
-  return rows
+export function paymentUserIds(rows: readonly PaymentRow[]): readonly string[] {
+  return rows.flatMap((row) => (row.payee.kind === 'member' ? [row.payerId, row.payee.userId] : [row.payerId]))
+}
+
+function paymentsFrom(rows: readonly PaymentRow[], stakesGo: StakesGo, users: ReadonlyMap<string, UserDoc>): readonly Payment[] {
+  return [...rows]
     .sort(
       (a, b) =>
         compare(b.paidOn, a.paidOn) || b.createdAt.toMillis() - a.createdAt.toMillis() || compare(a.id, b.id),
@@ -344,16 +346,24 @@ async function loadPayments(db: Database, groupId: GroupId, stakesGo: StakesGo):
     })
 }
 
+export type LedgerActivity = {
+  readonly checkIns: readonly CheckInDoc[]
+  readonly payments: readonly PaymentRow[]
+}
+
 // Nets are recomputed from check-ins, membership dates, and payments on every read. Nothing is cached.
 // The calendar rows come from every membership, so a member who left keeps their row and their debts.
-export async function readLedger(db: Database, groupId: GroupId, today: IsoDate): Promise<Ledger | null> {
-  const group = await readGroup(db, groupId)
-  const terms = group ? activeTerms(group) : null
-  if (!group || !terms) return null
-  const [members, payments] = await Promise.all([
-    loadMembers(db, groupId, group),
-    loadPayments(db, groupId, terms.stakesGo),
-  ])
+// users must hold every member and every payer and member payee.
+export function ledgerFrom(
+  group: GroupDoc,
+  activity: LedgerActivity,
+  users: ReadonlyMap<string, UserDoc>,
+  today: IsoDate,
+): Ledger | null {
+  const terms = activeTerms(group)
+  if (!terms) return null
+  const members = membersFrom(group, activity.checkIns, users)
+  const payments = paymentsFrom(activity.payments, terms.stakesGo, users)
   const window = { phase: 'active', startsOn: terms.startsOn, endsOn: terms.endsOn } as const
   const calendar = buildCalendar({ window, today }, members)
   const base = { calendar, currency: terms.currency, minorDigits: terms.minorDigits, payments }

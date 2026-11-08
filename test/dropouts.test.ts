@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { readLedger, type GroupLedger } from '../src/balances.ts'
+import type { GroupLedger } from '../src/balances.ts'
 import { parseIsoDate, saveChallenge, saveRhythm, startChallenge, type IsoDate } from '../src/challenge.ts'
 import { logCheckIn } from '../src/checkins.ts'
 import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
 import { recordDropout } from '../src/dropouts.ts'
-import { joinGroup, viewGroup, type GroupId } from '../src/groups.ts'
+import { joinGroup, type GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
 import { readCheckIns, readGroup } from '../src/store.ts'
 import { CHECK_IN_TODAY, closeServer, cookieFor, groupWith, listen, person, post, setJoinedOn } from './support/fixtures.ts'
+import { readLedger, viewGroup } from './support/reads.ts'
 
 function iso(raw: string): IsoDate {
   const day = parseIsoDate(raw)

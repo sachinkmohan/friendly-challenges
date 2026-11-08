@@ -8,8 +8,12 @@ export type Database = Firestore
 const DEMO_PROJECT = 'demo-friendly-challenges'
 const apps = new WeakMap<Firestore, App>()
 
+export function usesEmulator(): boolean {
+  return Boolean(process.env.FIRESTORE_EMULATOR_HOST?.trim())
+}
+
 function appOptions(projectId: string | undefined): AppOptions {
-  if (process.env.FIRESTORE_EMULATOR_HOST?.trim()) {
+  if (usesEmulator()) {
     return { projectId: projectId ?? (process.env.FIREBASE_PROJECT_ID?.trim() || DEMO_PROJECT) }
   }
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT?.trim() ?? ''

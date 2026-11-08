@@ -5,8 +5,6 @@ import {
   formatStake,
   memberIsDue,
   parseIsoDate,
-  readChallengeHeadline,
-  readMemberChallenge,
   saveChallenge,
   saveRhythm,
   startChallenge,
@@ -23,6 +21,7 @@ import type { Account } from '../src/identity.ts'
 import { safeReturnPath } from '../src/page.ts'
 import { activeMemberIds, groupRef, readGroup, utcToday, type ChallengeDoc } from '../src/store.ts'
 import { closeServer, cookieFor, groupWith, listen, person, post, setLeftOn } from './support/fixtures.ts'
+import { readChallengeHeadline, readMemberChallenge } from './support/reads.ts'
 
 function day(value: string) {
   const parsed = parseIsoDate(value)

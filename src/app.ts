@@ -1,11 +1,9 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { authFor, type Database } from './db.ts'
 import { upsertAccount } from './accounts.ts'
-import { readLedger, recordPayment, type PaymentFailure, type PaymentInput } from './balances.ts'
+import { recordPayment, type PaymentFailure, type PaymentInput } from './balances.ts'
 import { clearCookie, readCookie, writeCookie } from './cookies.ts'
 import {
-  readChallengeHeadline,
-  readMemberChallenge,
   saveChallenge,
   saveRhythm,
   startChallenge,
@@ -16,10 +14,10 @@ import {
 } from './challenge.ts'
 import { listHeatmaps, utcToday } from './calendar.ts'
 import type { IsoDate } from './challenge.ts'
-import { readGroup } from './store.ts'
-import { listCheckIns, logCheckIn, type CheckInInput } from './checkins.ts'
+import { logCheckIn, type CheckInInput } from './checkins.ts'
 import { recordDropout, type DropoutFailure, type DropoutInput } from './dropouts.ts'
-import { createGroup, deleteGroup, joinGroup, listHomeGroups, viewGroup, type GroupId } from './groups.ts'
+import { createGroup, deleteGroup, joinGroup, listHomeGroups, type GroupId } from './groups.ts'
+import { loadGroupPage, type GroupPage } from './grouppage.ts'
 import { readBrowser } from './browser.ts'
 import { googleIdentity, type Account, type AuthFailure, type FirebaseWebConfig, type IdToken, type Viewer } from './identity.ts'
 import {
@@ -77,13 +75,16 @@ function sendRedirect(res: ServerResponse, location: string, cookies: string[] =
   res.end()
 }
 
-async function viewerFrom(req: IncomingMessage, deps: AppDeps): Promise<Viewer> {
-  const token = readCookie(req.headers.cookie, SESSION_COOKIE)
-  const account = await timeStep('session', () => accountForSession(deps.db, token))
+function viewerFor(req: IncomingMessage, deps: AppDeps, account: Account | null): Viewer {
   if (!account) {
     return { state: 'signed_out', firebase: deps.firebase, origin: requestOrigin(req), browser: readBrowser(req.headers['user-agent']) }
   }
   return { state: 'signed_in', account }
+}
+
+async function viewerFrom(req: IncomingMessage, deps: AppDeps): Promise<Viewer> {
+  const token = readCookie(req.headers.cookie, SESSION_COOKIE)
+  return viewerFor(req, deps, await timeStep('session', () => accountForSession(deps.db, token)))
 }
 
 function today(deps: AppDeps): IsoDate {
@@ -176,6 +177,14 @@ async function handleGroup(
   route: GroupRoute,
   deps: AppDeps,
 ): Promise<void> {
+  if (route.kind === 'show') {
+    if (method !== 'GET') return rejectMethod(res, 'GET')
+    const toast = takeToast(req.headers.cookie)
+    const who = { kind: 'cookie', token: readCookie(req.headers.cookie, SESSION_COOKIE) } as const
+    const page = await loadGroupPage(deps.db, who, route.groupId, today(deps))
+    sendPage(res, 200, page, viewerFor(req, deps, page.account), origin, undefined, toast)
+    return
+  }
   const viewer = await viewerFrom(req, deps)
   if (route.kind === 'new') {
     if (method !== 'GET') return rejectMethod(res, 'GET')
@@ -197,16 +206,6 @@ async function handleGroup(
       return
     }
     sendRedirect(res, groupHref(created.groupId), [toastCookie({ kind: 'created', group: created.name })], 303)
-    return
-  }
-  if (route.kind === 'show') {
-    if (method !== 'GET') return rejectMethod(res, 'GET')
-    const toast = takeToast(req.headers.cookie)
-    if (viewer.state === 'signed_out') {
-      await sendGroupPage(res, 200, viewer, route.groupId, origin, deps, undefined, toast)
-      return
-    }
-    await sendMemberPage(res, 200, viewer.account, route.groupId, origin, deps, undefined, toast)
     return
   }
   if (route.kind === 'save_challenge' || route.kind === 'start_challenge' || route.kind === 'save_rhythm') {
@@ -231,12 +230,9 @@ async function handleGroup(
   }
   if (method !== 'POST') return rejectMethod(res, 'POST')
   if (viewer.state === 'signed_out') {
-    const view = await viewGroup(deps.db, null, route.groupId)
-    if (view.kind === 'missing') {
-      sendHtml(res, 404, renderMessage('Not found', 'That page does not exist.'))
-      return
-    }
-    await sendGroupPage(res, view.kind === 'full' || view.kind === 'solo' ? 409 : 401, viewer, route.groupId, origin, deps)
+    const page = await loadGroupPage(deps.db, { kind: 'known', account: null }, route.groupId, today(deps))
+    const closed = page.kind === 'outsider' && (page.view.kind === 'full' || page.view.kind === 'solo')
+    sendPage(res, closed ? 409 : 401, page, viewer, origin)
     return
   }
   const joined = await joinGroup(deps.db, viewer.account, route.groupId)
@@ -282,66 +278,25 @@ async function sendGroupPage(
   origin: string,
   deps: AppDeps,
   attempt?: ChallengeAttempt,
-  toast: ToastReceipt = NO_TOAST,
 ): Promise<void> {
-  const account = viewer.state === 'signed_in' ? viewer.account : null
-  const view = await viewGroup(deps.db, account, groupId)
-  if (view.kind === 'missing') {
-    notFound(res)
-    return
-  }
-  if (view.kind === 'members') {
-    if (!account) {
-      notFound(res)
-      return
-    }
-    await sendMemberPage(res, status, account, groupId, origin, deps, attempt, toast)
-    return
-  }
-  const headline = await readChallengeHeadline(deps.db, groupId)
-  sendHtml(res, status, renderGroup({ ...view, headline }, viewer, origin, attempt, toast.text), toast.cookies)
+  const who = { kind: 'known', account: viewer.state === 'signed_in' ? viewer.account : null } as const
+  sendPage(res, status, await loadGroupPage(deps.db, who, groupId, today(deps)), viewer, origin, attempt)
 }
 
-async function sendMemberPage(
+function sendPage(
   res: ServerResponse,
   status: number,
-  account: Account,
-  groupId: GroupId,
+  page: GroupPage,
+  viewer: Viewer,
   origin: string,
-  deps: AppDeps,
   attempt?: ChallengeAttempt,
   toast: ToastReceipt = NO_TOAST,
-): Promise<void> {
-  const viewer: Viewer = { state: 'signed_in', account }
-  const view = await viewGroup(deps.db, account, groupId)
-  if (view.kind === 'missing') {
+): void {
+  if (page.kind === 'missing') {
     notFound(res)
     return
   }
-  if (view.kind !== 'members') {
-    const headline = await readChallengeHeadline(deps.db, groupId)
-    sendHtml(res, status, renderGroup({ ...view, headline }, viewer, origin, attempt, toast.text), toast.cookies)
-    return
-  }
-  const loaded = await readMemberChallenge(deps.db, account, groupId)
-  if (!loaded.ok) {
-    const again = await viewGroup(deps.db, account, groupId)
-    if (again.kind === 'missing') {
-      notFound(res)
-      return
-    }
-    if (again.kind !== 'members') {
-      const headline = await readChallengeHeadline(deps.db, groupId)
-      sendHtml(res, status, renderGroup({ ...again, headline }, viewer, origin, attempt, toast.text), toast.cookies)
-      return
-    }
-    sendHtml(res, 500, renderMessage('Something went wrong', 'Try that again.'))
-    return
-  }
-  const card = loaded.card
-  const checkIns = card.phase === 'active' ? await listCheckIns(deps.db, groupId) : []
-  const ledger = card.phase === 'active' ? await readLedger(deps.db, groupId, today(deps)) : null
-  sendHtml(res, status, renderGroup({ ...view, challenge: card, checkIns, ledger }, viewer, origin, attempt, toast.text), toast.cookies)
+  sendHtml(res, status, renderGroup(page.view, viewer, origin, attempt, toast.text), toast.cookies)
 }
 
 async function finishChallenge(
@@ -365,11 +320,7 @@ async function finishChallenge(
   const status = challengeStatus(result.failure)
   const failure: ChallengeAttempt = { [slot]: result.failure }
   const attempt: ChallengeAttempt = status === 409 ? failure : { ...failure, ...drafts }
-  if (result.failure === 'not_member') {
-    await sendGroupPage(res, status, { state: 'signed_in', account }, groupId, origin, deps, attempt)
-    return
-  }
-  await sendMemberPage(res, status, account, groupId, origin, deps, attempt)
+  await sendGroupPage(res, status, { state: 'signed_in', account }, groupId, origin, deps, attempt)
 }
 
 async function postChallenge(
@@ -417,36 +368,6 @@ async function postChallenge(
   await finishChallenge(res, origin, route.groupId, viewer.account, deps, result, { rhythmDraft: rhythm })
 }
 
-// One line per check-in in the server log (Netlify function logs), with the dates the decision rests on.
-async function logCheckInOutcome(
-  db: AppDeps['db'],
-  userId: string,
-  groupId: GroupId,
-  input: CheckInInput,
-  today: IsoDate,
-  outcome: string,
-): Promise<void> {
-  const group = await readGroup(db, groupId)
-  const member = group?.members[userId]
-  console.log(
-    JSON.stringify({
-      event: 'check_in',
-      outcome,
-      groupId,
-      userId,
-      day: input.day,
-      color: input.color,
-      today,
-      joinedOn: member?.joinedOn ?? null,
-      leftOn: member?.leftOn ?? null,
-      startsOn: group?.challenge?.startsOn ?? null,
-      endsOn: group?.challenge?.endsOn ?? null,
-      phase: group?.challenge?.phase ?? null,
-      rhythm: group?.rhythms[userId]?.kind ?? null,
-    }),
-  )
-}
-
 async function postCheckIn(
   req: IncomingMessage,
   res: ServerResponse,
@@ -466,7 +387,6 @@ async function postCheckIn(
   if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
   const input: CheckInInput = { day: form.get('day') ?? '', color: form.get('color') ?? '' }
   const logged = await logCheckIn(deps.db, viewer.account, groupId, input, today(deps))
-  await logCheckInOutcome(deps.db, viewer.account.id, groupId, input, today(deps), logged.ok ? 'saved' : logged.failure)
   if (logged.ok) {
     sendRedirect(res, groupHref(groupId), [toastCookie(checkInToast(logged.day, logged.color, logged.previous))], 303)
     return
@@ -479,7 +399,7 @@ async function postCheckIn(
     await sendGroupPage(res, 403, viewer, groupId, origin, deps, { checkInFailure: logged.failure })
     return
   }
-  await sendMemberPage(res, 400, viewer.account, groupId, origin, deps, {
+  await sendGroupPage(res, 400, viewer, groupId, origin, deps, {
     checkInFailure: logged.failure,
     checkInDay: input.day,
   })
@@ -535,7 +455,7 @@ async function postPayment(
     await sendGroupPage(res, 403, viewer, groupId, origin, deps, attempt)
     return
   }
-  await sendMemberPage(res, paymentStatus(recorded.failure), viewer.account, groupId, origin, deps, attempt)
+  await sendGroupPage(res, paymentStatus(recorded.failure), viewer, groupId, origin, deps, attempt)
 }
 
 function dropoutStatus(failure: DropoutFailure): number {
@@ -580,7 +500,7 @@ async function postDropout(
     await sendGroupPage(res, 403, viewer, groupId, origin, deps, attempt)
     return
   }
-  await sendMemberPage(res, dropoutStatus(recorded.failure), viewer.account, groupId, origin, deps, attempt)
+  await sendGroupPage(res, dropoutStatus(recorded.failure), viewer, groupId, origin, deps, attempt)
 }
 
 async function postDelete(
@@ -614,7 +534,7 @@ async function postDelete(
     await sendGroupPage(res, 403, viewer, groupId, origin, deps, attempt)
     return
   }
-  await sendMemberPage(res, deleted.failure === 'not_creator' ? 403 : 400, viewer.account, groupId, origin, deps, attempt)
+  await sendGroupPage(res, deleted.failure === 'not_creator' ? 403 : 400, viewer, groupId, origin, deps, attempt)
 }
 
 function rejectForm(res: ServerResponse, failure: 'too_large' | 'bad_type'): void {
