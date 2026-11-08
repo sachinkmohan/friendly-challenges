@@ -1,6 +1,6 @@
 # 0003: We will build one slice at a time
 
-- **Status:** accepted
+- **Status:** amended by [0009](0009-allow-solo-challenges-owed-to-a-cause.md)
 - **Date:** 2026-11-06
 
 ## Context
