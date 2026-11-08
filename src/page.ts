@@ -1018,7 +1018,7 @@ function headlineText(headline: ChallengeHeadline | null): string {
 
 export function renderGroup(
   view:
-    | (Extract<GroupView, { kind: 'preview' | 'full' }> & { readonly headline: ChallengeHeadline | null })
+    | (Extract<GroupView, { kind: 'preview' | 'full' | 'solo' }> & { readonly headline: ChallengeHeadline | null })
     | (Extract<GroupView, { kind: 'members' }> & {
         readonly challenge: MemberChallengeCard
         readonly checkIns: readonly CheckIn[]
@@ -1033,6 +1033,11 @@ export function renderGroup(
   const failure = failureParagraph(attempt)
   if (view.kind === 'full') {
     return groupCard(`${title}${count}${failure}${headlineText(view.headline)}<p>This group is full.</p>`)
+  }
+  if (view.kind === 'solo') {
+    return groupCard(
+      `${title}${count}${failure}${headlineText(view.headline)}<p>This is a solo challenge that has already started, so nobody can join it.</p>`,
+    )
   }
   if (view.kind === 'preview') {
     return groupCard(`${title}${count}${failure}${headlineText(view.headline)}${joinControl(view.groupId, viewer)}`)

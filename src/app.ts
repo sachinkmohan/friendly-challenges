@@ -220,7 +220,7 @@ async function handleGroup(
       sendHtml(res, 404, renderMessage('Not found', 'That page does not exist.'))
       return
     }
-    await sendGroupPage(res, view.kind === 'full' ? 409 : 401, null, route.groupId, origin, deps)
+    await sendGroupPage(res, view.kind === 'full' || view.kind === 'solo' ? 409 : 401, null, route.groupId, origin, deps)
     return
   }
   const joined = await joinGroup(deps.db, viewer.account, route.groupId)
