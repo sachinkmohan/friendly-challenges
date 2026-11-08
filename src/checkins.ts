@@ -2,7 +2,19 @@ import type { Database } from './db.ts'
 import { memberIsDue, parseIsoDate, rhythmFrom, spanFrom, utcOrdinal, windowFrom, type IsoDate, type MembershipSpan } from './challenge.ts'
 import type { GroupId } from './groups.ts'
 import type { Account } from './identity.ts'
-import { checkInRef, compare, memberOf, parseCheckIn, readCheckIns, readGroup, readUsers, rhythmOf, type CheckInDoc } from './store.ts'
+import {
+  checkInRef,
+  compare,
+  memberOf,
+  parseCheckIn,
+  readCheckIns,
+  readGroup,
+  readGroupWith,
+  readUsers,
+  rhythmOf,
+  type CheckInDoc,
+  type GroupDoc,
+} from './store.ts'
 
 export const CHECK_IN_LABELS = {
   green: 'Green',
@@ -73,6 +85,35 @@ function withinSpan(span: MembershipSpan, day: IsoDate): boolean {
   return day >= span.joinedOn && (span.leftOn === null || day <= span.leftOn)
 }
 
+// One line per check-in in the server log (Netlify function logs), with the dates the decision rests on.
+function reportCheckIn(
+  group: GroupDoc | null,
+  userId: string,
+  groupId: GroupId,
+  input: CheckInInput,
+  today: IsoDate,
+  outcome: CheckInFailure | 'saved',
+): void {
+  const member = group ? memberOf(group, userId) : null
+  console.log(
+    JSON.stringify({
+      event: 'check_in',
+      outcome,
+      groupId,
+      userId,
+      day: input.day,
+      color: input.color,
+      today,
+      joinedOn: member?.joinedOn ?? null,
+      leftOn: member?.leftOn ?? null,
+      startsOn: group?.challenge?.startsOn ?? null,
+      endsOn: group?.challenge?.endsOn ?? null,
+      phase: group?.challenge?.phase ?? null,
+      rhythm: (group ? rhythmOf(group, userId) : null)?.kind ?? null,
+    }),
+  )
+}
+
 export async function logCheckIn(
   db: Database,
   account: Account,
@@ -80,29 +121,38 @@ export async function logCheckIn(
   input: CheckInInput,
   today: IsoDate,
 ): Promise<LogCheckInResult> {
+  const report = (group: GroupDoc | null, outcome: CheckInFailure | 'saved') =>
+    reportCheckIn(group, account.id, groupId, input, today, outcome)
+  const refuse = async (failure: CheckInFailure): Promise<LogCheckInResult> => {
+    report(await readGroup(db, groupId), failure)
+    return { ok: false, failure }
+  }
   const day = parseIsoDate(input.day)
-  if (!day) return { ok: false, failure: 'bad_day' }
-  if (!hasBegun(day, today)) return { ok: false, failure: 'future_day' }
-  if (!isColor(input.color)) return { ok: false, failure: 'bad_color' }
+  if (!day) return refuse('bad_day')
+  if (!hasBegun(day, today)) return refuse('future_day')
+  if (!isColor(input.color)) return refuse('bad_color')
   const checkIn: CheckInDoc = { userId: account.id, day, color: input.color }
+  const ref = checkInRef(db, groupId, account.id, day)
+  let seen: GroupDoc | null = null
   try {
     const previous = await db.runTransaction(async (tx): Promise<CheckInColor | null> => {
-      const group = await readGroup(db, groupId, tx)
+      const [group, existing] = await readGroupWith(db, groupId, tx, ref)
+      seen = group
       if (!group) throw new CheckInRejected('group_missing')
       const span = spanFrom(memberOf(group, account.id))
       if (!span) throw new CheckInRejected('not_member')
       if (!withinSpan(span, day)) throw new CheckInRejected('outside_membership')
       const rhythm = rhythmFrom(rhythmOf(group, account.id))
       if (!memberIsDue(windowFrom(group.challenge), span, rhythm, day)) throw new CheckInRejected('not_due')
-      const ref = checkInRef(db, groupId, account.id, day)
-      const existing = await tx.get(ref)
       tx.set(ref, checkIn)
       return existing.exists ? colorOf(parseCheckIn(existing.data())) : null
     })
+    report(seen, 'saved')
     return { ok: true, day, color: input.color, previous }
   } catch (error) {
-    if (error instanceof CheckInRejected) return { ok: false, failure: error.failure }
-    throw error
+    if (!(error instanceof CheckInRejected)) throw error
+    report(seen, error.failure)
+    return { ok: false, failure: error.failure }
   }
 }
 

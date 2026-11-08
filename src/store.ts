@@ -243,6 +243,17 @@ export async function readGroup(db: Database, groupId: GroupId | string, tx?: Tr
   return groupFrom(tx ? await tx.get(ref) : await ref.get())
 }
 
+// The group and one more document in a single round of a transaction, so a rule and the doc it guards cost one read.
+export async function readGroupWith(
+  db: Database,
+  groupId: GroupId | string,
+  tx: Transaction,
+  other: DocumentReference,
+): Promise<readonly [GroupDoc | null, DocumentSnapshot]> {
+  const [group, snapshot] = await tx.getAll(groupRef(db, groupId), other)
+  return [groupFrom(group!), snapshot!]
+}
+
 export async function readUsers(db: Database, userIds: readonly string[]): Promise<Map<string, UserDoc>> {
   const unique = [...new Set(userIds)]
   if (unique.length === 0) return new Map()

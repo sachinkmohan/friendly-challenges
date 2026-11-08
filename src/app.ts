@@ -16,7 +16,6 @@ import {
 } from './challenge.ts'
 import { listHeatmaps, utcToday } from './calendar.ts'
 import type { IsoDate } from './challenge.ts'
-import { readGroup } from './store.ts'
 import { listCheckIns, logCheckIn, type CheckInInput } from './checkins.ts'
 import { recordDropout, type DropoutFailure, type DropoutInput } from './dropouts.ts'
 import { createGroup, deleteGroup, joinGroup, listHomeGroups, viewGroup, type GroupId } from './groups.ts'
@@ -417,36 +416,6 @@ async function postChallenge(
   await finishChallenge(res, origin, route.groupId, viewer.account, deps, result, { rhythmDraft: rhythm })
 }
 
-// One line per check-in in the server log (Netlify function logs), with the dates the decision rests on.
-async function logCheckInOutcome(
-  db: AppDeps['db'],
-  userId: string,
-  groupId: GroupId,
-  input: CheckInInput,
-  today: IsoDate,
-  outcome: string,
-): Promise<void> {
-  const group = await readGroup(db, groupId)
-  const member = group?.members[userId]
-  console.log(
-    JSON.stringify({
-      event: 'check_in',
-      outcome,
-      groupId,
-      userId,
-      day: input.day,
-      color: input.color,
-      today,
-      joinedOn: member?.joinedOn ?? null,
-      leftOn: member?.leftOn ?? null,
-      startsOn: group?.challenge?.startsOn ?? null,
-      endsOn: group?.challenge?.endsOn ?? null,
-      phase: group?.challenge?.phase ?? null,
-      rhythm: group?.rhythms[userId]?.kind ?? null,
-    }),
-  )
-}
-
 async function postCheckIn(
   req: IncomingMessage,
   res: ServerResponse,
@@ -466,7 +435,6 @@ async function postCheckIn(
   if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
   const input: CheckInInput = { day: form.get('day') ?? '', color: form.get('color') ?? '' }
   const logged = await logCheckIn(deps.db, viewer.account, groupId, input, today(deps))
-  await logCheckInOutcome(deps.db, viewer.account.id, groupId, input, today(deps), logged.ok ? 'saved' : logged.failure)
   if (logged.ok) {
     sendRedirect(res, groupHref(groupId), [toastCookie(checkInToast(logged.day, logged.color, logged.previous))], 303)
     return

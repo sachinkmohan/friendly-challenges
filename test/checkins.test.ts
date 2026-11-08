@@ -187,6 +187,39 @@ test('a challenge started before join dates moved at Start counts its active mem
   }
 })
 
+test('each logged day writes one check_in line from the group the decision read', async (t) => {
+  const { db, ada, groupId } = await activeCrew()
+  try {
+    await groupRef(db, groupId).update({ 'challenge.joinsFromStart': FieldValue.delete() })
+    await setJoinedOn(db, groupId, '2026-11-06', [ada.id])
+    const log = t.mock.method(console, 'log', () => {})
+    const lines = () =>
+      log.mock.calls.flatMap((call) => {
+        const text = call.arguments[0]
+        return typeof text === 'string' && text.startsWith('{"event":"check_in"') ? [JSON.parse(text) as Record<string, unknown>] : []
+      })
+    await logCheckIn(db, ada, groupId, { day: '2026-11-02', color: 'green' }, CHECK_IN_TODAY)
+    await logCheckIn(db, ada, groupId, { day: 'soon', color: 'green' }, CHECK_IN_TODAY)
+    const group = {
+      groupId,
+      userId: ada.id,
+      today: CHECK_IN_TODAY,
+      joinedOn: '2026-11-01',
+      leftOn: null,
+      startsOn: '2026-11-01',
+      endsOn: '2026-11-30',
+      phase: 'active',
+      rhythm: 'every_day',
+    }
+    assert.deepEqual(lines(), [
+      { event: 'check_in', outcome: 'saved', day: '2026-11-02', color: 'green', ...group },
+      { event: 'check_in', outcome: 'bad_day', day: 'soon', color: 'green', ...group },
+    ])
+  } finally {
+    await closeDatabase(db)
+  }
+})
+
 test('a draft challenge has no due days', async () => {
   const { db, ada, groupId } = await activeCrew({ start: false })
   try {
