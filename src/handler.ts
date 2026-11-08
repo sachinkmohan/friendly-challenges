@@ -31,12 +31,13 @@ function openOnce() {
 }
 
 async function openApp(): Promise<App> {
-  const [{ firebaseWebConfig, openDatabase }, { loadSample }, { createApp }] = await timeStep(
+  const [{ firebaseWebConfig, openDatabase, usesEmulator }, { loadSample }, { createApp }] = await timeStep(
     'open.import',
     async () => [await import('./db.ts'), await import('./sample.ts'), await import('./app.ts')] as const,
   )
   const db = await timeStep('open.connect', async () => timeDatabase(openDatabase()))
-  await timeStep('open.sample', () => loadSample(db))
+  // The build seeds production (ADR 0007), so only the emulator loads the sample on open.
+  if (usesEmulator()) await timeStep('open.sample', () => loadSample(db))
   const port = process.env.PORT ?? '3000'
   const origin = process.env.APP_ORIGIN ?? `http://localhost:${port}`
   console.log(`Friendly challenges at ${origin}`)

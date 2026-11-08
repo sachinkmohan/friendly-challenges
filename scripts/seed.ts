@@ -1,7 +1,7 @@
-import { closeDatabase, openDatabase } from '../src/db.ts'
+import { closeDatabase, openDatabase, usesEmulator } from '../src/db.ts'
 import { loadSample } from '../src/sample.ts'
 
-if (!process.env.FIREBASE_SERVICE_ACCOUNT?.trim() && !process.env.FIRESTORE_EMULATOR_HOST?.trim()) {
+if (!process.env.FIREBASE_SERVICE_ACCOUNT?.trim() && !usesEmulator()) {
   console.log('seed: nothing to do')
   process.exit(0)
 }
