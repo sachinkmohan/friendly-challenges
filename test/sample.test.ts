@@ -19,7 +19,7 @@ const asOf = parseIsoDate(comment[1])
 if (!asOf || expectedDebt !== SAMPLE_OPEN_DEBT_MINOR) throw new Error('sample comment')
 
 function debt(ledger: Ledger | null): number {
-  if (!ledger) throw new Error('ledger')
+  if (ledger?.kind !== 'group') throw new Error('ledger')
   return ledger.open.reduce((sum, line) => sum + line.amountMinor, 0)
 }
 
@@ -49,7 +49,7 @@ test('the sample balance matches the figure written next to the seed', async () 
   try {
     const ledger = await readLedger(db, groupId, asOf)
     assert.equal(debt(ledger), expectedDebt)
-    assert.equal(ledger?.nets.reduce((sum, line) => sum + line.netMinor, 0), 0)
+    assert.equal(ledger?.kind === 'group' && ledger.nets.reduce((sum, line) => sum + line.netMinor, 0), 0)
     if (utcToday() >= asOf) {
       assert.equal(debt(await readLedger(db, groupId, utcToday())), expectedDebt)
     }

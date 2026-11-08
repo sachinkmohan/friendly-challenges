@@ -1,4 +1,12 @@
-import { paymentFailureCopy, type Ledger, type Payment, type PaymentFailure, type PaymentInput } from './balances.ts'
+import {
+  paymentFailureCopy,
+  type GroupLedger,
+  type Ledger,
+  type Payment,
+  type PaymentFailure,
+  type PaymentInput,
+  type SoloLedger,
+} from './balances.ts'
 import {
   challengeFailureCopy,
   formatMinor,
@@ -868,7 +876,7 @@ function money(ledger: Ledger, minor: number): string {
   return `${formatMinor(minor, ledger.minorDigits)} ${ledger.currency}`
 }
 
-function netItem(ledger: Ledger, line: Ledger['nets'][number]): string {
+function netItem(ledger: GroupLedger, line: GroupLedger['nets'][number]): string {
   const name = escapeHtml(line.displayName)
   const amount = escapeHtml(money(ledger, Math.abs(line.netMinor)))
   const sign = line.netMinor > 0 ? 'owed' : line.netMinor < 0 ? 'owes' : 'even'
@@ -877,18 +885,29 @@ function netItem(ledger: Ledger, line: Ledger['nets'][number]): string {
   return `<li data-net="${escapeHtml(line.userId)}" data-minor="${line.netMinor}"><span class="member-name">${name}</span> <span class="net ${sign}">${text}</span></li>`
 }
 
-function openItem(ledger: Ledger, line: Ledger['open'][number]): string {
+function openItem(ledger: GroupLedger, line: GroupLedger['open'][number]): string {
   const amount = escapeHtml(money(ledger, line.amountMinor))
   return `<li data-open="${escapeHtml(line.debtorId)}:${escapeHtml(line.creditorId)}" data-minor="${line.amountMinor}">${escapeHtml(line.debtorName)} owes ${escapeHtml(line.creditorName)} ${amount}</li>`
 }
 
 function paymentItem(ledger: Ledger, payment: Payment): string {
   const when = escapeHtml(payment.paidOn)
-  const ref = payment.paypalRef ? ` <span class="count">PayPal ${escapeHtml(payment.paypalRef)}</span>` : ''
+  const refLabel = ledger.kind === 'solo' ? 'Reference' : 'PayPal'
+  const ref = payment.paypalRef ? ` <span class="count">${refLabel} ${escapeHtml(payment.paypalRef)}</span>` : ''
   return `<li><span class="member-name">${escapeHtml(payment.payerName)} paid ${escapeHtml(payment.payeeName)} ${escapeHtml(money(ledger, payment.amountMinor))} <time datetime="${when}">${when}</time></span>${ref}</li>`
 }
 
-function paymentForm(groupId: GroupId, ledger: Ledger, userId: string, draft: PaymentInput | undefined): string {
+function paymentFields(ledger: Ledger, draft: PaymentInput | undefined, refLabel: string): string {
+  return `<label for="payment-amount">Amount in ${escapeHtml(ledger.currency)}</label>
+      <input id="payment-amount" name="amount" value="${escapeHtml(draft?.amount ?? '')}" inputmode="decimal" autocomplete="off" required>
+      <label for="payment-date">Date paid</label>
+      <input id="payment-date" name="paid_on" type="date" value="${escapeHtml(draft?.paidOn ?? '')}" required>
+      <label for="payment-ref">${refLabel} (optional)</label>
+      <input id="payment-ref" name="paypal_ref" value="${escapeHtml(draft?.paypalRef ?? '')}" autocomplete="off">
+      <button type="submit">Record payment</button>`
+}
+
+function paymentForm(groupId: GroupId, ledger: GroupLedger, userId: string, draft: PaymentInput | undefined): string {
   const others = ledger.people.filter((person) => person.userId !== userId)
   if (others.length === 0) return ''
   const action = escapeHtml(`${groupHref(groupId)}${paymentSuffix}`)
@@ -901,27 +920,44 @@ function paymentForm(groupId: GroupId, ledger: Ledger, userId: string, draft: Pa
       <p>The app does not send money. Record a payment that already happened.</p>
       <label for="payment-payee">Paid to</label>
       <select id="payment-payee" name="payee">${payees}</select>
-      <label for="payment-amount">Amount in ${escapeHtml(ledger.currency)}</label>
-      <input id="payment-amount" name="amount" value="${escapeHtml(draft?.amount ?? '')}" inputmode="decimal" autocomplete="off" required>
-      <label for="payment-date">Date paid</label>
-      <input id="payment-date" name="paid_on" type="date" value="${escapeHtml(draft?.paidOn ?? '')}" required>
-      <label for="payment-ref">PayPal reference (optional)</label>
-      <input id="payment-ref" name="paypal_ref" value="${escapeHtml(draft?.paypalRef ?? '')}" autocomplete="off">
-      <button type="submit">Record payment</button>
+      ${paymentFields(ledger, draft, 'PayPal reference')}
     </form>`
 }
 
-function balancesSection(groupId: GroupId, ledger: Ledger, userId: string, draft: PaymentInput | undefined): string {
+function paymentList(ledger: Ledger): string {
+  if (ledger.payments.length === 0) return ''
+  return `<p class="check-ins-title">Payments</p><ul class="check-ins payments">${ledger.payments.map((item) => paymentItem(ledger, item)).join('')}</ul>`
+}
+
+function soloBalances(groupId: GroupId, ledger: SoloLedger, draft: PaymentInput | undefined): string {
+  const name = escapeHtml(ledger.member.displayName)
+  const cause = escapeHtml(ledger.cause)
+  const amount = escapeHtml(money(ledger, Math.abs(ledger.dueMinor)))
+  const sign = ledger.dueMinor > 0 ? 'owes' : ledger.dueMinor < 0 ? 'owed' : 'even'
+  const text =
+    sign === 'owes' ? `owes ${cause} ${amount}` : sign === 'owed' ? `has paid ${cause} ${amount} ahead` : `is even with ${cause}`
+  const due = `<ul class="check-ins balances"><li data-due="${ledger.dueMinor}"><span class="member-name">${name}</span> <span class="net ${sign}">${text}</span></li></ul>`
+  const action = escapeHtml(`${groupHref(groupId)}${paymentSuffix}`)
+  const form = `<form method="post" action="${action}">
+      <p class="grid-title">Record a payment you made</p>
+      <p>The app does not send money. Record a payment that already happened.</p>
+      <p>Paid to ${cause}</p>
+      ${paymentFields(ledger, draft, 'Reference')}
+    </form>`
+  return `<p class="check-ins-title">Balance</p>${due}${form}${paymentList(ledger)}`
+}
+
+function groupBalances(groupId: GroupId, ledger: GroupLedger, userId: string, draft: PaymentInput | undefined): string {
   const nets = `<ul class="check-ins balances">${ledger.nets.map((line) => netItem(ledger, line)).join('')}</ul>`
   const open =
     ledger.open.length === 0
       ? '<p>Nobody owes anyone.</p>'
       : `<ul class="check-ins open-amounts">${ledger.open.map((line) => openItem(ledger, line)).join('')}</ul>`
-  const payments =
-    ledger.payments.length === 0
-      ? ''
-      : `<p class="check-ins-title">Payments</p><ul class="check-ins payments">${ledger.payments.map((item) => paymentItem(ledger, item)).join('')}</ul>`
-  return `<p class="check-ins-title">Balances</p>${nets}<p class="check-ins-title">Who owes whom</p>${open}${paymentForm(groupId, ledger, userId, draft)}${payments}`
+  return `<p class="check-ins-title">Balances</p>${nets}<p class="check-ins-title">Who owes whom</p>${open}${paymentForm(groupId, ledger, userId, draft)}${paymentList(ledger)}`
+}
+
+function balancesSection(groupId: GroupId, ledger: Ledger, userId: string, draft: PaymentInput | undefined): string {
+  return ledger.kind === 'solo' ? soloBalances(groupId, ledger, draft) : groupBalances(groupId, ledger, userId, draft)
 }
 
 function dropoutForm(

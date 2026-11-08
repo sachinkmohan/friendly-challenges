@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { readLedger, type Ledger } from '../src/balances.ts'
+import { readLedger, type GroupLedger } from '../src/balances.ts'
 import { parseIsoDate, saveChallenge, saveRhythm, startChallenge, type IsoDate } from '../src/challenge.ts'
 import { logCheckIn } from '../src/checkins.ts'
 import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
@@ -57,17 +57,17 @@ async function leftOn(db: Database, groupId: GroupId): Promise<Record<string, st
   return Object.fromEntries(Object.entries(read.members).map(([userId, member]) => [userId, member.leftOn]))
 }
 
-async function ledger(db: Database, groupId: GroupId): Promise<Ledger> {
+async function ledger(db: Database, groupId: GroupId): Promise<GroupLedger> {
   const read = await readLedger(db, groupId, today)
-  if (!read) throw new Error('ledger')
+  if (read?.kind !== 'group') throw new Error('ledger')
   return read
 }
 
-function netsOf(read: Ledger): Record<string, number> {
+function netsOf(read: GroupLedger): Record<string, number> {
   return Object.fromEntries(read.nets.map((line) => [line.userId, line.netMinor]))
 }
 
-function total(read: Ledger): number {
+function total(read: GroupLedger): number {
   return read.nets.reduce((sum, line) => sum + line.netMinor, 0)
 }
 
