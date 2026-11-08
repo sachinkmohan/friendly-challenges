@@ -323,9 +323,14 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
     }
     :focus-visible { outline: 2px solid #1c1915; outline-offset: 2px; }
     @media (max-width: 500px), (max-height: 500px) {
+      html, body, .stage { height: auto; overflow: visible; }
       body { background: #efeae1; }
-      .device { width: 100%; height: 100dvh; padding: 0; border-radius: 0; box-shadow: none; }
-      .phone { border-radius: 0; }
+      .stage { display: block; }
+      .device { width: 100%; height: auto; padding: 0; border-radius: 0; box-shadow: none; }
+      .phone { height: auto; min-height: 100dvh; overflow: visible; border-radius: 0; }
+      .appbar { position: sticky; top: 0; z-index: 1; }
+      .screens { overflow: visible; }
+      .tabbar { position: sticky; bottom: 0; }
       .indicator { display: none; }
     }
   </style>
