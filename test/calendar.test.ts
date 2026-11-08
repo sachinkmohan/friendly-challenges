@@ -37,12 +37,12 @@ function marks(days: readonly { mark: DayMark }[]): readonly DayMark[] {
 
 test('each member row marks green, red, empty, and blank days through today', () => {
   const calendar = buildCalendar({ window, today: iso('2026-11-06') }, [
-    member('ada', '2026-11-01', { kind: 'every_day', anchorOn: iso('2026-11-01') }, {
+    member('ada', '2026-11-01', { kind: 'every_day' }, {
       '2026-11-03': 'green',
       '2026-11-04': 'red',
     }),
-    member('grace', '2026-11-01', { kind: 'every_2_days', anchorOn: iso('2026-11-02') }, { '2026-11-02': 'green' }),
-    member('lin', '2026-11-05', { kind: 'every_day', anchorOn: iso('2026-11-01') }),
+    member('grace', '2026-11-01', { kind: 'every_2_days' }, { '2026-11-03': 'green' }),
+    member('lin', '2026-11-05', { kind: 'every_day' }),
     member('noor', '2026-11-03', null),
   ])
   assert.deepEqual(calendar.days, ['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06'])
@@ -50,7 +50,7 @@ test('each member row marks green, red, empty, and blank days through today', ()
     calendar.rows.map((row) => [row.userId, marks(row.days)]),
     [
       ['ada', ['red', 'red', 'green', 'red', 'red', 'empty']],
-      ['grace', ['blank', 'green', 'blank', 'red', 'blank', 'empty']],
+      ['grace', ['red', 'blank', 'green', 'blank', 'red', 'blank']],
       ['lin', ['blank', 'blank', 'blank', 'blank', 'red', 'empty']],
       ['noor', ['blank', 'blank', 'blank', 'blank', 'blank', 'blank']],
     ],
@@ -59,7 +59,7 @@ test('each member row marks green, red, empty, and blank days through today', ()
 
 test('a logged day after today keeps its color and an unlogged one stays empty', () => {
   const calendar = buildCalendar({ window, today: iso('2026-11-02') }, [
-    member('ada', '2026-11-01', { kind: 'every_day', anchorOn: iso('2026-11-01') }, { '2026-11-02': 'green' }),
+    member('ada', '2026-11-01', { kind: 'every_day' }, { '2026-11-02': 'green' }),
   ])
   assert.deepEqual(marks(calendar.rows[0]?.days ?? []), ['red', 'green'])
 })
@@ -73,7 +73,7 @@ test('the columns stop at the end date once the challenge is over and are absent
 
 test('the heatmap puts weeks in columns and weekdays in rows', () => {
   const days = buildCalendar({ window: { ...window, startsOn: iso('2026-11-03') }, today: iso('2026-11-12') }, [
-    member('ada', '2026-11-01', { kind: 'every_day', anchorOn: iso('2026-11-01') }),
+    member('ada', '2026-11-01', { kind: 'every_day' }),
   ]).rows[0]?.days
   const weeks = weeksOf(days ?? [])
   assert.equal(weeks.length, 2)
@@ -106,12 +106,12 @@ async function activeCrew(): Promise<Crew> {
     endsOn: '2026-11-30',
   })
   if (!saved.ok) throw new Error(saved.failure)
-  for (const [who, interval, anchorOn] of [
-    [ada, 'every_day', '2026-11-01'],
-    [grace, 'every_2_days', '2026-11-02'],
-    [lin, 'every_day', '2026-11-01'],
+  for (const [who, interval] of [
+    [ada, 'every_day'],
+    [grace, 'every_2_days'],
+    [lin, 'every_day'],
   ] as const) {
-    const rhythm = await saveRhythm(db, who, groupId, { interval, anchorOn })
+    const rhythm = await saveRhythm(db, who, groupId, { interval })
     if (!rhythm.ok) throw new Error(rhythm.failure)
   }
   const started = await startChallenge(db, ada, groupId, { cause: '' })
@@ -123,7 +123,7 @@ test('the home heatmap reads only the signed-in member days in active challenges
   const { db, ada, grace, groupId } = await activeCrew()
   try {
     await logCheckIn(db, ada, groupId, { day: '2026-11-02', color: 'green' })
-    await logCheckIn(db, grace, groupId, { day: '2026-11-02', color: 'red' })
+    await logCheckIn(db, grace, groupId, { day: '2026-11-03', color: 'red' })
     const [heatmap, ...rest] = await listHeatmaps(db, ada, iso('2026-11-03'))
     assert.equal(rest.length, 0)
     assert.equal(heatmap?.groupId, groupId)
@@ -172,7 +172,7 @@ test('replacing a check-in updates the group calendar and the home heatmap', asy
       body: new URLSearchParams({ day, color }).toString(),
     })
   try {
-    await logCheckIn(db, grace, groupId, { day: '2026-11-02', color: 'green' })
+    await logCheckIn(db, grace, groupId, { day: '2026-11-03', color: 'green' })
     assert.equal((await log('2026-11-03', 'green')).status, 303)
 
     const before = await page(groupPath)
@@ -183,10 +183,10 @@ test('replacing a check-in updates the group calendar and the home heatmap', asy
       '2026-11-04': 'empty',
     })
     assert.deepEqual(rowMarks(before, `data-member="${grace.id}"`), {
-      '2026-11-01': 'blank',
-      '2026-11-02': 'green',
-      '2026-11-03': 'blank',
-      '2026-11-04': 'empty',
+      '2026-11-01': 'red',
+      '2026-11-02': 'blank',
+      '2026-11-03': 'green',
+      '2026-11-04': 'blank',
     })
     assert.match(before, /aria-label="2026-11-03 Kept it"/)
     assert.deepEqual(heatmapMarks(await page('/')), {

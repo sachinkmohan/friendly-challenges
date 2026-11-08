@@ -714,9 +714,11 @@ function typeLabel(type: ChallengeType): string {
   return type.kind === 'custom' ? type.label : PRESET_LABELS[type.preset]
 }
 
-function startStepText(step: StartStep, cap: number): string {
+function startStepText(step: StartStep, cap: number, missing: readonly string[]): string {
   if (step === 'terms_saved') return 'Save the challenge name, type, stake, and dates.'
-  if (step === 'anchors_in_range') return 'Every logging anchor is on or before the end date.'
+  if (step === 'rhythms_picked') {
+    return missing.length === 0 ? 'Everyone picked a rhythm.' : `Everyone picked a rhythm. Waiting on ${missing.join(', ')}.`
+  }
   return `1 to ${cap} people are active.`
 }
 
@@ -820,18 +822,16 @@ function termsForm(groupId: GroupId, currencies: readonly string[], values: Term
 }
 
 function rhythmText(rhythm: Rhythm): string {
-  const when = escapeHtml(rhythm.anchorOn)
-  return `<p>${escapeHtml(RHYTHM_LABELS[rhythm.kind])} <time datetime="${when}">${when}</time></p>`
+  return `<p>${escapeHtml(RHYTHM_LABELS[rhythm.kind])}</p>`
 }
 
-function rhythmForm(groupId: GroupId, interval: string, anchor: string): string {
+function rhythmForm(groupId: GroupId, interval: string, prompt: string): string {
   const action = escapeHtml(`${groupHref(groupId)}/rhythm`)
+  const title = prompt ? `<p class="section-title">${escapeHtml(prompt)}</p>` : ''
   return `<form method="post" action="${action}">
+      ${title}
       <label for="rhythm-interval">How often you log</label>
       <select id="rhythm-interval" name="interval">${intervalOptions(interval)}</select>
-      <label for="rhythm-anchor">Anchor date</label>
-      <p class="field-hint" id="rhythm-anchor-hint">The first day you log. Your next days repeat from it at the interval above. Pick a date on or before the challenge ends.</p>
-      <input id="rhythm-anchor" name="anchor_on" type="date" aria-describedby="rhythm-anchor-hint" value="${escapeHtml(anchor)}">
       <button type="submit">Save rhythm</button>
     </form>`
 }
@@ -846,7 +846,8 @@ function rhythmControl(
   const slot = rhythmSlot(challenge.phase, challenge.rhythms, userId)
   if (slot.mode === 'locked') return rhythmText(slot.rhythm)
   const stored = slot.mode === 'open' ? slot.rhythm : null
-  return rhythmForm(groupId, posted?.interval ?? stored?.kind ?? '', posted?.anchorOn ?? stored?.anchorOn ?? '')
+  const prompt = slot.mode === 'first' ? 'Pick your rhythm to start logging' : stored ? '' : 'Pick your rhythm'
+  return rhythmForm(groupId, posted?.interval ?? stored?.kind ?? '', prompt)
 }
 
 function checkInControl(
@@ -1013,24 +1014,28 @@ function startForm(groupId: GroupId, start: StartKind, cause: string | undefined
     </form>`
 }
 
-function startStepItem(step: StartStep, done: boolean, cap: number): string {
+function startStepItem(step: StartStep, done: boolean, cap: number, missing: readonly string[]): string {
   const mark = done ? '✓' : '○'
   const state = done ? 'Done.' : 'Not done yet.'
-  return `<li data-done="${done}"><span class="mark" aria-hidden="true">${mark}</span><span>${escapeHtml(startStepText(step, cap))} <span class="sr-only">${state}</span></span></li>`
+  return `<li data-done="${done}"><span class="mark" aria-hidden="true">${mark}</span><span>${escapeHtml(startStepText(step, cap, missing))} <span class="sr-only">${state}</span></span></li>`
 }
 
 function startSection(
   groupId: GroupId,
   challenge: Exclude<MemberChallengeCard, { phase: 'active' }>,
+  creator: Creator,
+  missing: readonly string[],
   failure: ChallengeFailure | undefined,
   cause: string | undefined,
 ): string {
-  const steps = challenge.checks.map((check) => startStepItem(check.step, check.done, challenge.cap)).join('')
+  const steps = challenge.checks.map((check) => startStepItem(check.step, check.done, challenge.cap, missing)).join('')
   const ready = challenge.phase === 'draft' && challenge.checks.every((check) => check.done)
   const alert = failure ? `<p class="start-error" role="alert">${escapeHtml(challengeFailureCopy[failure])}</p>` : ''
-  const control = ready
-    ? startForm(groupId, challenge.start, cause)
-    : '<p class="field-hint">Start challenge appears here once every step above is done.</p>'
+  const control = !creator.isViewer
+    ? `<p class="field-hint">Waiting for ${escapeHtml(creator.name)} to start.</p>`
+    : ready
+      ? startForm(groupId, challenge.start, cause)
+      : '<p class="field-hint">Start challenge appears here once every step above is done.</p>'
   return `<div id="start" role="group" aria-labelledby="start-title">
       <p class="section-title" id="start-title">Before you start</p>
       <ul class="start-steps">${steps}</ul>
@@ -1039,13 +1044,36 @@ function startSection(
     </div>`
 }
 
+function missingNames(members: readonly MemberLine[], missing: readonly string[]): readonly string[] {
+  return members.filter((member) => missing.includes(member.userId)).map((member) => member.displayName)
+}
+
+type Creator = { readonly isViewer: boolean; readonly name: string }
+
+function termsBlock(
+  groupId: GroupId,
+  challenge: MemberChallengeCard,
+  creator: Creator,
+  draft: ChallengeInput | undefined,
+): string {
+  if (creator.isViewer && challenge.phase !== 'active') {
+    const values = draft
+      ? termsFromDraft(draft)
+      : challenge.phase === 'draft'
+        ? termsFromStored(challenge.terms, challenge.minorDigits)
+        : emptyTerms
+    return termsForm(groupId, challenge.currencies, values)
+  }
+  if (challenge.phase === 'unopened') return `<p>Waiting for ${escapeHtml(creator.name)} to set the terms.</p>`
+  const stakesGo = challenge.phase === 'active' ? challenge.stakesGo : null
+  const setBy = creator.isViewer ? '' : `<p class="field-hint">Set by ${escapeHtml(creator.name)}.</p>`
+  return `${termsText(challenge.terms, challenge.minorDigits, stakesGo)}${setBy}`
+}
+
 function memberItem(member: MemberLine, rhythms: readonly RhythmLine[]): string {
   const when = escapeHtml(member.joinedOn)
   const rhythm = rhythms.find((line) => line.userId === member.userId)
-  const anchor = rhythm ? escapeHtml(rhythm.anchorOn) : ''
-  const logged = rhythm
-    ? `<span class="rhythm">${escapeHtml(RHYTHM_LABELS[rhythm.kind])} <time datetime="${anchor}">${anchor}</time></span>`
-    : ''
+  const logged = rhythm ? `<span class="rhythm">${escapeHtml(RHYTHM_LABELS[rhythm.kind])}</span>` : ''
   return `<li>${portrait(member)} <span class="member-name">${escapeHtml(member.displayName)} <time datetime="${when}">${when}</time></span>${logged}</li>`
 }
 
@@ -1087,21 +1115,21 @@ export function renderGroup(
     return groupCard(`${title}${count}${failure}${headlineText(view.headline)}${joinControl(view.groupId, viewer)}`)
   }
   const challenge = view.challenge
-  const terms =
-    challenge.phase === 'active'
-      ? termsText(challenge.terms, challenge.minorDigits, challenge.stakesGo)
-      : termsForm(
-          view.groupId,
-          challenge.currencies,
-          attempt?.draft
-            ? termsFromDraft(attempt.draft)
-            : challenge.phase === 'draft'
-              ? termsFromStored(challenge.terms, challenge.minorDigits)
-              : emptyTerms,
-        )
-  const start =
-    challenge.phase === 'active' ? '' : startSection(view.groupId, challenge, attempt?.startFailure, attempt?.causeDraft)
   const userId = viewer.state === 'signed_in' ? viewer.account.id : ''
+  const creatorName = view.members.find((member) => member.userId === view.creatorId)?.displayName ?? 'the creator'
+  const creator = { isViewer: userId === view.creatorId, name: creatorName }
+  const terms = termsBlock(view.groupId, challenge, creator, attempt?.draft)
+  const start =
+    challenge.phase === 'active'
+      ? ''
+      : startSection(
+          view.groupId,
+          challenge,
+          creator,
+          missingNames(view.members, challenge.missingRhythms),
+          attempt?.startFailure,
+          attempt?.causeDraft,
+        )
   const rhythm = rhythmControl(view.groupId, challenge, userId, attempt?.rhythmDraft)
   const checkIn = checkInControl(view.groupId, challenge, userId, attempt?.checkInDay)
   const rhythms = challenge.phase === 'unopened' ? [] : challenge.rhythms
@@ -1111,8 +1139,8 @@ export function renderGroup(
     ${count}
     ${failure}
     ${terms}
-    ${start}
     ${rhythm}
+    ${start}
     ${checkIn}
     <ul class="members">${view.members.map((member) => memberItem(member, rhythms)).join('')}</ul>
     ${view.ledger ? calendarGrid(view.ledger.calendar) : ''}

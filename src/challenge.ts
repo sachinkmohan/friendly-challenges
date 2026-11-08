@@ -30,7 +30,6 @@ const RHYTHM_STEP = {
   every_day: 1,
   every_2_days: 2,
   every_3_days: 3,
-  alternate_days: 2,
 } as const
 
 export type RhythmKind = keyof typeof RHYTHM_STEP
@@ -39,7 +38,6 @@ export const RHYTHM_LABELS: { readonly [K in RhythmKind]: string } = {
   every_day: 'Every day',
   every_2_days: 'Every 2 days',
   every_3_days: 'Every 3 days',
-  alternate_days: 'Alternate days',
 }
 
 const NAME_MAX = 40
@@ -83,18 +81,15 @@ export type ChallengeInput = {
 
 export type RhythmInput = {
   readonly interval: string
-  readonly anchorOn: string
 }
 
 export type Rhythm = {
   readonly kind: RhythmKind
-  readonly anchorOn: IsoDate
 }
 
 export type RhythmLine = {
   readonly userId: string
   readonly kind: RhythmKind
-  readonly anchorOn: IsoDate
 }
 
 export type ChallengeWindow = {
@@ -116,13 +111,13 @@ export type ChallengeHeadline = {
 
 export type StartKind = 'solo' | 'group' | 'over_cap'
 
-export type StartStep = 'terms_saved' | 'anchors_in_range' | 'headcount'
+export type StartStep = 'terms_saved' | 'rhythms_picked' | 'headcount'
 
 export type StartCheck = { readonly step: StartStep; readonly done: boolean }
 
 const startStepFailure = {
   terms_saved: 'no_challenge',
-  anchors_in_range: 'rhythm_past_end',
+  rhythms_picked: 'rhythms_missing',
   headcount: 'outside_headcount',
 } as const satisfies Record<StartStep, ChallengeFailure>
 
@@ -132,6 +127,7 @@ export type MemberChallengeCard =
       readonly cap: number
       readonly currencies: readonly CurrencyCode[]
       readonly checks: readonly StartCheck[]
+      readonly missingRhythms: readonly string[]
     }
   | {
       readonly phase: 'draft'
@@ -140,6 +136,7 @@ export type MemberChallengeCard =
       readonly cap: number
       readonly start: StartKind
       readonly checks: readonly StartCheck[]
+      readonly missingRhythms: readonly string[]
       readonly currencies: readonly CurrencyCode[]
       readonly rhythms: readonly RhythmLine[]
     }
@@ -174,10 +171,8 @@ export type ChallengeFailure =
   | 'cause_empty'
   | 'cause_too_long'
   | 'cause_for_group'
-  | 'rhythm_past_end'
+  | 'rhythms_missing'
   | 'bad_interval'
-  | 'bad_anchor'
-  | 'anchor_after_end'
 
 export const challengeFailureCopy = {
   name_empty: 'Type a challenge name.',
@@ -199,17 +194,15 @@ export const challengeFailureCopy = {
   cause_empty: 'Type who your missed days are owed to.',
   cause_too_long: 'Use 40 characters or fewer.',
   cause_for_group: 'Someone else joined, so this is a group challenge now and needs no cause. Press Start again.',
-  rhythm_past_end: 'Fix a logging anchor that sits after the challenge ends.',
+  rhythms_missing: 'Everyone needs to pick a rhythm before the challenge starts.',
   bad_interval: 'Pick how often you log.',
-  bad_anchor: 'Use a real anchor date.',
-  anchor_after_end: 'Pick an anchor on or before the end date.',
 } as const satisfies Record<ChallengeFailure, string>
 
 export type SaveChallengeResult =
   | { readonly ok: true }
   | {
       readonly ok: false
-      readonly failure: TermsFailure | 'group_missing' | 'not_member' | 'not_creator' | 'frozen' | 'anchor_after_end'
+      readonly failure: TermsFailure | 'group_missing' | 'not_member' | 'not_creator' | 'frozen'
     }
 
 export type StartChallengeResult =
@@ -225,7 +218,7 @@ export type StartChallengeResult =
         | 'cause_empty'
         | 'cause_too_long'
         | 'cause_for_group'
-        | 'rhythm_past_end'
+        | 'rhythms_missing'
     }
 
 export type SaveRhythmResult =
@@ -237,8 +230,6 @@ export type SaveRhythmResult =
         | 'not_member'
         | 'no_challenge'
         | 'bad_interval'
-        | 'bad_anchor'
-        | 'anchor_after_end'
         | 'frozen'
     }
 
@@ -320,9 +311,7 @@ export function memberIsDue(
   if (day < challenge.startsOn || day > challenge.endsOn) return false
   if (day < span.joinedOn) return false
   if (span.leftOn !== null && day > span.leftOn) return false
-  if (day < rhythm.anchorOn) return false
-  const count = utcOrdinal(day) - utcOrdinal(rhythm.anchorOn)
-  return count % RHYTHM_STEP[rhythm.kind] === 0
+  return (utcOrdinal(day) - utcOrdinal(challenge.startsOn)) % RHYTHM_STEP[rhythm.kind] === 0
 }
 
 export function formatMinor(minor: number, minorDigits: number): string {
@@ -340,7 +329,7 @@ export function formatStake(stakeMinor: StakeMinor, minorDigits: number): string
 
 export function rhythmSlot(phase: 'draft' | 'active', rhythms: readonly RhythmLine[], userId: string): RhythmSlot {
   const line = rhythms.find((item) => item.userId === userId)
-  const rhythm = line ? { kind: line.kind, anchorOn: line.anchorOn } : null
+  const rhythm = line ? { kind: line.kind } : null
   if (phase === 'draft') return { mode: 'open', rhythm }
   if (!rhythm) return { mode: 'first' }
   return { mode: 'locked', rhythm }
@@ -504,13 +493,16 @@ function startKind(activeCount: number): StartKind {
   return 'over_cap'
 }
 
+function rhythmsMissing(group: GroupDoc): readonly string[] {
+  return activeMemberIds(group).filter((userId) => !rhythmOf(group, userId))
+}
+
 // Listed in the order startChallenge reports them, so the first unmet step is the failure a press of Start gets.
 function startChecks(group: GroupDoc): readonly StartCheck[] {
   const active = activeMemberIds(group)
-  const endsOn = group.challenge?.endsOn ?? ''
   return [
     { step: 'terms_saved', done: group.challenge !== null },
-    { step: 'anchors_in_range', done: active.every((userId) => (rhythmOf(group, userId)?.anchorOn ?? '') <= endsOn) },
+    { step: 'rhythms_picked', done: rhythmsMissing(group).length === 0 },
     { step: 'headcount', done: startKind(active.length) !== 'over_cap' },
   ]
 }
@@ -541,7 +533,7 @@ export function spanFrom(member: MemberDoc | null): MembershipSpan | null {
 export function rhythmFrom(doc: RhythmDoc | null): Rhythm | null {
   if (!doc) return null
   if (!isRhythmKind(doc.kind)) throw new Error('rhythm')
-  return { kind: doc.kind, anchorOn: dateFrom(doc.anchorOn) }
+  return { kind: doc.kind }
 }
 
 function rhythmLines(group: GroupDoc): readonly RhythmLine[] {
@@ -613,10 +605,6 @@ export async function saveChallenge(
       if (sameTerms(existing.terms, terms)) return null
       throw new CommandError('frozen')
     }
-    const datesMoved = existing && (existing.terms.startsOn !== terms.startsOn || existing.terms.endsOn !== terms.endsOn)
-    if (datesMoved && Object.values(group.rhythms).some((rhythm) => rhythm.anchorOn > terms.endsOn)) {
-      throw new CommandError('anchor_after_end')
-    }
     return { challenge: draftDoc(terms) }
   })
 }
@@ -649,15 +637,12 @@ export async function saveRhythm(
   input: RhythmInput,
 ): Promise<SaveRhythmResult> {
   if (!isRhythmKind(input.interval)) return { ok: false, failure: 'bad_interval' }
-  const anchorOn = parseIsoDate(input.anchorOn)
-  if (!anchorOn) return { ok: false, failure: 'bad_anchor' }
-  const rhythm: RhythmDoc = { kind: input.interval, anchorOn }
+  const rhythm: RhythmDoc = { kind: input.interval }
   return changeGroup<SaveRhythmResult>(db, account, groupId, (group) => {
     if (!group.challenge) throw new CommandError('no_challenge')
-    if (anchorOn > group.challenge.endsOn) throw new CommandError('anchor_after_end')
     const current = rhythmOf(group, account.id)
     if (group.challenge.phase === 'active' && current) {
-      if (current.kind === rhythm.kind && current.anchorOn === rhythm.anchorOn) return null
+      if (current.kind === rhythm.kind) return null
       throw new CommandError('frozen')
     }
     return { [`rhythms.${account.id}`]: rhythm }
@@ -678,12 +663,16 @@ export async function readMemberChallenge(db: Database, account: Account, groupI
   const cap = ACTIVE_MEMBER_CAP
   const currencies = CURRENCY_CODES as readonly CurrencyCode[]
   const checks = startChecks(group)
-  if (!group.challenge) return { ok: true, card: { phase: 'unopened', cap, currencies, checks } }
+  const missingRhythms = rhythmsMissing(group)
+  if (!group.challenge) return { ok: true, card: { phase: 'unopened', cap, currencies, checks, missingRhythms } }
   const stored = storedFrom(group.challenge)
   const rhythms = rhythmLines(group)
   if (stored.phase === 'draft') {
     const start = startKind(activeMemberIds(group).length)
-    return { ok: true, card: { phase: 'draft', terms: stored.terms, minorDigits: stored.minorDigits, cap, start, checks, currencies, rhythms } }
+    return {
+      ok: true,
+      card: { phase: 'draft', terms: stored.terms, minorDigits: stored.minorDigits, cap, start, checks, missingRhythms, currencies, rhythms },
+    }
   }
   return {
     ok: true,

@@ -245,7 +245,7 @@ function challengeStatus(failure: ChallengeFailure): number {
     failure === 'no_challenge' ||
     failure === 'outside_headcount' ||
     failure === 'cause_for_group' ||
-    failure === 'rhythm_past_end'
+    failure === 'rhythms_missing'
   ) {
     return 409
   }
@@ -389,10 +389,7 @@ async function postChallenge(
     await finishChallenge(res, origin, route.groupId, viewer.account, deps, saved, { draft: input })
     return
   }
-  const rhythm: RhythmInput = {
-    interval: form.get('interval') ?? '',
-    anchorOn: form.get('anchor_on') ?? '',
-  }
+  const rhythm: RhythmInput = { interval: form.get('interval') ?? '' }
   const saved = await saveRhythm(deps.db, viewer.account, route.groupId, rhythm)
   await finishChallenge(res, origin, route.groupId, viewer.account, deps, saved, { rhythmDraft: rhythm })
 }
