@@ -70,13 +70,13 @@ test('only the creator can delete the group, and only after confirming', async (
 test('deleting removes the group, its check-ins, and its payments for every member', async () => {
   const { db, ada, grace, lin, groupId } = await activeCrew()
   try {
-    assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-02', color: 'red' }), { ok: true })
-    assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-02', color: 'green' }), { ok: true })
+    assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-02', color: 'red' }), { ok: true, day: '2026-11-02', color: 'red', previous: null })
+    assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-02', color: 'green' }), { ok: true, day: '2026-11-02', color: 'green', previous: null })
     const paid = await recordPayment(db, grace, groupId, { payeeId: ada.id, amount: '5', paidOn: '2026-11-03', paypalRef: '' }, today)
-    assert.deepEqual(paid, { ok: true })
+    assert.deepEqual(paid, { ok: true, amountMinor: 500, currency: 'USD', minorDigits: 2, payeeName: 'Ada' })
     assert.equal(await childCount(db, groupId), 3)
 
-    assert.deepEqual(await deleteGroup(db, ada, groupId, true), { ok: true })
+    assert.deepEqual(await deleteGroup(db, ada, groupId, true), { ok: true, name: 'Morning run' })
 
     assert.equal(await readGroup(db, groupId), null)
     assert.equal(await childCount(db, groupId), 0)

@@ -47,15 +47,15 @@ async function activeCrew(options: { start?: boolean } = {}): Promise<Crew> {
 test('a due day saves once and a second save replaces the color', async () => {
   const { db, ada, grace, groupId } = await activeCrew()
   try {
-    assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-03', color: 'green' }), { ok: true })
-    assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-05', color: 'red' }), { ok: true })
+    assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-03', color: 'green' }), { ok: true, day: '2026-11-03', color: 'green', previous: null })
+    assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-05', color: 'red' }), { ok: true, day: '2026-11-05', color: 'red', previous: null })
     assert.deepEqual(await listCheckIns(db, groupId), [
       { userId: grace.id, displayName: 'Grace', day: '2026-11-05', color: 'red' },
       { userId: ada.id, displayName: 'Ada', day: '2026-11-03', color: 'green' },
     ])
 
-    assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-03', color: 'red' }), { ok: true })
-    assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-03', color: 'red' }), { ok: true })
+    assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-03', color: 'red' }), { ok: true, day: '2026-11-03', color: 'red', previous: 'green' })
+    assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-03', color: 'red' }), { ok: true, day: '2026-11-03', color: 'red', previous: 'red' })
     const ada3 = (await listCheckIns(db, groupId)).filter((item) => item.userId === ada.id)
     assert.deepEqual(ada3, [{ userId: ada.id, displayName: 'Ada', day: '2026-11-03', color: 'red' }])
   } finally {
@@ -109,14 +109,14 @@ test('a day before joining or after leaving is rejected', async () => {
       ok: false,
       failure: 'outside_membership',
     })
-    assert.deepEqual(await logCheckIn(db, lin, groupId, { day: '2026-11-05', color: 'green' }), { ok: true })
+    assert.deepEqual(await logCheckIn(db, lin, groupId, { day: '2026-11-05', color: 'green' }), { ok: true, day: '2026-11-05', color: 'green', previous: null })
 
     await setLeftOn(db, groupId, grace.id, '2026-11-11')
     assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-12', color: 'green' }), {
       ok: false,
       failure: 'outside_membership',
     })
-    assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-11', color: 'green' }), { ok: true })
+    assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-11', color: 'green' }), { ok: true, day: '2026-11-11', color: 'green', previous: null })
 
     assert.deepEqual(await logCheckIn(db, outsider, groupId, { day: '2026-11-05', color: 'green' }), {
       ok: false,

@@ -3,7 +3,7 @@ import type { Database } from './db.ts'
 import { parseIsoDate, type IsoDate } from './challenge.ts'
 import type { GroupId } from './groups.ts'
 import type { Account } from './identity.ts'
-import { groupRef, memberOf, readGroup } from './store.ts'
+import { groupRef, memberOf, readGroup, readUsers } from './store.ts'
 
 export type DropoutInput = {
   readonly memberId: string
@@ -29,7 +29,9 @@ export const dropoutFailureCopy = {
   future_day: 'Pick a last day that is today or earlier.',
 } as const satisfies Record<DropoutFailure, string>
 
-export type RecordDropoutResult = { readonly ok: true } | { readonly ok: false; readonly failure: DropoutFailure }
+export type RecordDropoutResult =
+  | { readonly ok: true; readonly groupName: string; readonly memberName: string; readonly lastDay: IsoDate }
+  | { readonly ok: false; readonly failure: DropoutFailure }
 
 class DropoutRejected extends Error {
   readonly failure: DropoutFailure
@@ -48,7 +50,7 @@ export async function recordDropout(
   today: IsoDate,
 ): Promise<RecordDropoutResult> {
   try {
-    await db.runTransaction(async (tx) => {
+    const recorded = await db.runTransaction(async (tx) => {
       const group = await readGroup(db, groupId, tx)
       if (!group) throw new DropoutRejected('group_missing')
       if (memberOf(group, actor.id)?.leftOn !== null) throw new DropoutRejected('not_member')
@@ -60,8 +62,11 @@ export async function recordDropout(
       if (lastDay < target.joinedOn) throw new DropoutRejected('before_join')
       if (lastDay > today) throw new DropoutRejected('future_day')
       tx.update(groupRef(db, groupId), new FieldPath('members', input.memberId, 'leftOn'), lastDay)
+      return { groupName: group.name, lastDay }
     })
-    return { ok: true }
+    const member = (await readUsers(db, [input.memberId])).get(input.memberId)
+    if (!member) throw new Error('member user')
+    return { ok: true, ...recorded, memberName: member.displayName }
   } catch (error) {
     if (error instanceof DropoutRejected) return { ok: false, failure: error.failure }
     throw error
