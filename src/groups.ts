@@ -1,6 +1,6 @@
 import { stakesGoFrom } from './challenge.ts'
 import type { Database } from './db.ts'
-import { ACTIVE_MEMBER_CAP, activeMemberIds, compare, groupRef, parseGroup, readGroup, readUsers, utcToday, type GroupDoc } from './store.ts'
+import { ACTIVE_MEMBER_CAP, activeMemberIds, compare, groupRef, memberOf, parseGroup, readGroup, readUsers, utcToday, type GroupDoc } from './store.ts'
 import type { Account } from './identity.ts'
 
 export type GroupId = string & { readonly brand: 'GroupId' }
@@ -71,6 +71,17 @@ function isStartedSolo(group: GroupDoc): boolean {
   return stakesGoFrom(group.challenge)?.kind === 'cause'
 }
 
+export type DeleteFailure = 'group_missing' | 'not_member' | 'not_creator' | 'not_confirmed'
+
+export const deleteFailureCopy = {
+  group_missing: 'That group does not exist.',
+  not_member: 'Join the group before you delete it.',
+  not_creator: 'Only the person who made the group can delete it.',
+  not_confirmed: 'Tick the box to confirm you want to delete the group for everyone.',
+} as const satisfies Record<DeleteFailure, string>
+
+export type DeleteResult = { ok: true } | { ok: false; failure: DeleteFailure }
+
 class JoinRejected extends Error {
   readonly failure: JoinFailure
 
@@ -119,6 +130,23 @@ export async function joinGroup(db: Database, account: Account, groupId: GroupId
     if (error instanceof JoinRejected) return { ok: false, failure: error.failure }
     throw error
   }
+}
+
+// The group document goes first, inside the creator check, so a check-in or payment racing the delete
+// finds no group and is refused. The sweep then removes the check-ins and payments under it.
+export async function deleteGroup(db: Database, actor: Account, groupId: GroupId, confirmed: boolean): Promise<DeleteResult> {
+  const failure = await db.runTransaction(async (tx): Promise<DeleteFailure | null> => {
+    const group = await readGroup(db, groupId, tx)
+    if (!group) return 'group_missing'
+    if (memberOf(group, actor.id)?.leftOn !== null) return 'not_member'
+    if (group.createdBy !== actor.id) return 'not_creator'
+    if (!confirmed) return 'not_confirmed'
+    tx.delete(groupRef(db, groupId))
+    return null
+  })
+  if (failure) return { ok: false, failure }
+  await db.recursiveDelete(groupRef(db, groupId))
+  return { ok: true }
 }
 
 export async function viewGroup(

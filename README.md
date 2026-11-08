@@ -74,6 +74,10 @@ Debts on days through the last day stay. The member who left still owes for thei
 
 The leaver no longer counts toward the cap of 5, so someone else can join, unless the challenge is solo. If everyone else drops out of a challenge that started with 2 or more people, the last member's missed days cost nothing. It does not become a solo challenge.
 
+## Deleting a group
+
+The creator can delete the group at any time, before or after the start. At the bottom of the group card, tick **Delete it for everyone** and choose **Delete group**. The group, its challenge, every check-in, and every payment go away for every member, and the creator lands on the home page. Nothing can be restored. Only an active creator sees the control. The server refuses anyone else, and it refuses a request without the confirmation.
+
 ## Sample
 
 A new database loads one group named Pantry. Ada, Bea, and Cam share a no-sugar challenge. They log on different intervals. The days include green and red check-ins, and Ada has recorded one payment to Cam. `SAMPLE_OPEN_DEBT_MINOR` in `src/sample.ts` states the open debt in minor units. The balance on that group matches that number. Loading the sample again writes only the documents that are missing.
