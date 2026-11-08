@@ -307,6 +307,11 @@ test('one member starts a solo challenge owed to a cause and two to five start o
     const crowdedCard = await readMemberChallenge(db, ada, crowded)
     if (!crowdedCard.ok || crowdedCard.card.phase !== 'draft') throw new Error('draft')
     assert.equal(crowdedCard.card.start, 'over_cap')
+    assert.deepEqual(crowdedCard.card.checks, [
+      { step: 'terms_saved', done: true },
+      { step: 'anchors_in_range', done: true },
+      { step: 'headcount', done: false },
+    ])
     assert.deepEqual(await startChallenge(db, ada, crowded, noCause), { ok: false, failure: 'outside_headcount' })
     assert.equal((await challengeOf(db, crowded))?.phase, 'draft')
   } finally {
@@ -368,6 +373,12 @@ test('started terms and a stored rhythm stay put unless the write is equal', asy
     assert.equal(dated?.rhythms[ada.id]?.anchorOn, '2026-10-01')
 
     await setChallengeDates(db, groupId, '2026-09-01', '2026-09-15')
+    const pastEnd = await readMemberChallenge(db, ada, groupId)
+    if (!pastEnd.ok || pastEnd.card.phase !== 'draft') throw new Error('draft')
+    assert.deepEqual(
+      pastEnd.card.checks.find((check) => check.step === 'anchors_in_range'),
+      { step: 'anchors_in_range', done: false },
+    )
     assert.deepEqual(await startChallenge(db, ada, groupId, noCause), { ok: false, failure: 'rhythm_past_end' })
     const blocked = await challengeOf(db, groupId)
     assert.equal(blocked?.phase, 'draft')
@@ -481,11 +492,12 @@ test('the group card saves the stake, starts with the people who are active, and
     assert.match(memberHtml, /value="KWD"/)
     assert.doesNotMatch(memberHtml, /value="XYZ"/)
     assert.match(memberHtml, /name="stake"/)
-    assert.match(memberHtml, /A challenge can start when 1 to 5 people are active/)
+    assert.match(memberHtml, /<li data-done="true">[^]*?Save the challenge name, type, stake, and dates\. <span class="sr-only">Done\.<\/span>/)
+    assert.match(memberHtml, /<li data-done="true">[^]*?1 to 5 people are active\./)
     assert.match(memberHtml, /Invite friends with the link, or start on your own\./)
     assert.match(memberHtml, /<label for="start-cause">Who your missed days are owed to<\/label>/)
     assert.match(memberHtml, /<input id="start-cause" name="cause"/)
-    assert.match(memberHtml, /action="[^"]+\/challenge\/start"/)
+    assert.match(memberHtml, /action="[^"]+\/challenge\/start#start"/)
     assert.match(memberHtml, /class="screen is-current"/)
     assert.doesNotMatch(memberHtml, /<section[^>]*\sid=/)
 
@@ -517,7 +529,7 @@ test('the group card saves the stake, starts with the people who are active, and
 
     const noCause = await post(base, `${groupPath}/challenge/start`, adaCookie, form({ cause: ' ' }))
     assert.equal(noCause.status, 400)
-    assert.match(await noCause.text(), /Type who your missed days are owed to\./)
+    assert.match(await noCause.text(), /<p class="start-error" role="alert">Type who your missed days are owed to\.<\/p>/)
     const longCause = await post(base, `${groupPath}/challenge/start`, adaCookie, form({ cause: 'c'.repeat(41) }))
     assert.equal(longCause.status, 400)
     const longCauseHtml = await longCause.text()
@@ -527,7 +539,7 @@ test('the group card saves the stake, starts with the people who are active, and
 
     assert.equal((await post(base, `${groupPath}/join`, graceCookie)).status, 303)
     const pairHtml = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
-    assert.match(pairHtml, /action="[^"]+\/challenge\/start"/)
+    assert.match(pairHtml, /action="[^"]+\/challenge\/start#start"/)
     assert.doesNotMatch(pairHtml, /name="cause"/)
     assert.doesNotMatch(pairHtml, /start on your own/)
     const staleSolo = await post(base, `${groupPath}/challenge/start`, adaCookie, form({ cause: 'Food bank' }))
@@ -539,7 +551,7 @@ test('the group card saves the stake, starts with the people who are active, and
 
     assert.equal((await post(base, `${groupPath}/join`, linCookie)).status, 303)
     const ready = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
-    assert.match(ready, /action="[^"]+\/challenge\/start"/)
+    assert.match(ready, /action="[^"]+\/challenge\/start#start"/)
     const started = await post(base, `${groupPath}/challenge/start`, adaCookie, '')
     assert.equal(started.status, 303)
     const startedAgain = await post(base, `${groupPath}/challenge/start`, graceCookie, '')
@@ -678,7 +690,7 @@ test('a member on their own starts a solo challenge and the card names the cause
     const html = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
     assert.match(html, /<p>Missed days are owed to Food &amp; Shelter\.<\/p>/)
     assert.doesNotMatch(html, /challenge\/start/)
-    assert.doesNotMatch(html, /A challenge can start when/)
+    assert.doesNotMatch(html, /Before you start/)
   } finally {
     await closeServer(server)
     await closeDatabase(db)
