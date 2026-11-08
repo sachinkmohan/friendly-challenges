@@ -18,7 +18,7 @@ import { listHeatmaps, utcToday } from './calendar.ts'
 import type { IsoDate } from './challenge.ts'
 import { listCheckIns, logCheckIn, type CheckInInput } from './checkins.ts'
 import { recordDropout, type DropoutFailure, type DropoutInput } from './dropouts.ts'
-import { createGroup, joinGroup, listHomeGroups, viewGroup, type GroupId } from './groups.ts'
+import { createGroup, deleteGroup, joinGroup, listHomeGroups, viewGroup, type GroupId } from './groups.ts'
 import { googleIdentity, type Account, type AuthFailure, type FirebaseWebConfig, type IdToken, type Viewer } from './identity.ts'
 import {
   groupHref,
@@ -211,6 +211,10 @@ async function handleGroup(
   }
   if (route.kind === 'record_dropout') {
     await postDropout(req, res, method, origin, route.groupId, viewer, deps)
+    return
+  }
+  if (route.kind === 'delete_group') {
+    await postDelete(req, res, method, origin, route.groupId, viewer, deps)
     return
   }
   if (method !== 'POST') return rejectMethod(res, 'POST')
@@ -515,6 +519,40 @@ async function postDropout(
     return
   }
   await sendMemberPage(res, dropoutStatus(recorded.failure), viewer.account, groupId, origin, deps, attempt)
+}
+
+async function postDelete(
+  req: IncomingMessage,
+  res: ServerResponse,
+  method: string,
+  origin: string,
+  groupId: GroupId,
+  viewer: Viewer,
+  deps: AppDeps,
+): Promise<void> {
+  if (method !== 'POST') return rejectMethod(res, 'POST')
+  if (viewer.state === 'signed_out') {
+    req.resume()
+    await sendGroupPage(res, 401, null, groupId, origin, deps)
+    return
+  }
+  const form = await readForm(req)
+  if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
+  const deleted = await deleteGroup(deps.db, viewer.account, groupId, form.get('confirm') === 'yes')
+  if (deleted.ok) {
+    sendRedirect(res, '/', [], 303)
+    return
+  }
+  if (deleted.failure === 'group_missing') {
+    notFound(res)
+    return
+  }
+  const attempt: ChallengeAttempt = { deleteFailure: deleted.failure }
+  if (deleted.failure === 'not_member') {
+    await sendGroupPage(res, 403, viewer.account, groupId, origin, deps, attempt)
+    return
+  }
+  await sendMemberPage(res, deleted.failure === 'not_creator' ? 403 : 400, viewer.account, groupId, origin, deps, attempt)
 }
 
 function rejectForm(res: ServerResponse, failure: 'too_large' | 'bad_type'): void {

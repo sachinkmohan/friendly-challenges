@@ -30,7 +30,7 @@ import {
 import { DAY_MARK_LABELS, type GroupCalendar, type Heatmap, type MarkedDay } from './calendar.ts'
 import { dropoutFailureCopy, type DropoutFailure, type DropoutInput } from './dropouts.ts'
 import { CHECK_IN_LABELS, checkInFailureCopy, type CheckIn, type CheckInFailure } from './checkins.ts'
-import { parseGroupId, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
+import { deleteFailureCopy, parseGroupId, type DeleteFailure, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
 import { authFailureCopy, type Account, type AuthFailure, type FirebaseWebConfig, type Viewer } from './identity.ts'
 
 function escapeHtml(value: string): string {
@@ -217,6 +217,9 @@ const frame = (screens: string, tabs: string) => `<!doctype html>
     .check-in-colors { display: flex; gap: 12px; }
     .check-in-colors button.green { background: #2f7d4a; }
     .check-in-colors button.red { background: #b3392f; }
+    button.danger { background: #b3392f; }
+    label.confirm { gap: 12px; font-weight: 400; }
+    label.confirm input { width: 20px; min-height: 20px; margin: 0; flex: none; }
     .check-ins-title { margin-top: 24px; font-weight: 650; color: #1c1915; }
     ul.check-ins { margin-top: 8px; }
     .swatch { width: 16px; height: 16px; flex: none; border-radius: 50%; }
@@ -450,6 +453,7 @@ const rhythmSuffix = '/rhythm'
 const checkInSuffix = '/check-in'
 const paymentSuffix = '/payment'
 const dropoutSuffix = '/dropout'
+const deleteSuffix = '/delete'
 
 export type HomePage =
   | Extract<Viewer, { state: 'signed_out' }>
@@ -466,6 +470,7 @@ export type GroupRoute =
   | { kind: 'log_check_in'; groupId: GroupId }
   | { kind: 'record_payment'; groupId: GroupId }
   | { kind: 'record_dropout'; groupId: GroupId }
+  | { kind: 'delete_group'; groupId: GroupId }
 
 export function groupHref(groupId: GroupId): string {
   return `${groupsRoot}/${groupId}`
@@ -495,6 +500,7 @@ function routeSuffix(
     | 'log_check_in'
     | 'record_payment'
     | 'record_dropout'
+    | 'delete_group'
     | 'join',
 ): GroupRoute | null {
   if (!rest.endsWith(suffix) || rest.length <= suffix.length) return null
@@ -517,6 +523,7 @@ export function matchGroupPath(path: string): GroupRoute | null {
     routeSuffix(rest, checkInSuffix, 'log_check_in') ??
     routeSuffix(rest, paymentSuffix, 'record_payment') ??
     routeSuffix(rest, dropoutSuffix, 'record_dropout') ??
+    routeSuffix(rest, deleteSuffix, 'delete_group') ??
     routeSuffix(rest, joinSuffix, 'join')
   if (suffixed) return suffixed
   if (rest.includes('/')) return null
@@ -694,6 +701,7 @@ export type ChallengeAttempt = {
   paymentDraft?: PaymentInput
   dropoutFailure?: DropoutFailure
   dropoutDraft?: DropoutInput
+  deleteFailure?: DeleteFailure
   draft?: ChallengeInput
   rhythmDraft?: RhythmInput
   causeDraft?: string
@@ -727,6 +735,7 @@ function failureParagraph(attempt?: ChallengeAttempt): string {
   if (attempt?.checkInFailure) return `<p>${escapeHtml(checkInFailureCopy[attempt.checkInFailure])}</p>`
   if (attempt?.paymentFailure) return `<p>${escapeHtml(paymentFailureCopy[attempt.paymentFailure])}</p>`
   if (attempt?.dropoutFailure) return `<p>${escapeHtml(dropoutFailureCopy[attempt.dropoutFailure])}</p>`
+  if (attempt?.deleteFailure) return `<p>${escapeHtml(deleteFailureCopy[attempt.deleteFailure])}</p>`
   return ''
 }
 
@@ -1002,6 +1011,17 @@ function dropoutForm(
     </form>`
 }
 
+function deleteForm(view: Extract<GroupView, { kind: 'members' }>, userId: string): string {
+  if (userId !== view.creatorId) return ''
+  const action = escapeHtml(`${groupHref(view.groupId)}${deleteSuffix}`)
+  return `<form method="post" action="${action}">
+      <p class="grid-title">Delete this group</p>
+      <p>This removes the challenge, every check-in, and every payment for everyone. It cannot be undone.</p>
+      <label class="confirm"><input type="checkbox" name="confirm" value="yes" required> Delete it for everyone</label>
+      <button type="submit" class="danger">Delete group</button>
+    </form>`
+}
+
 function startForm(groupId: GroupId, start: StartKind, cause: string | undefined): string {
   if (start === 'over_cap') return ''
   const action = escapeHtml(`${groupHref(groupId)}${challengeStartSuffix}#start`)
@@ -1147,6 +1167,7 @@ export function renderGroup(
     ${view.ledger ? balancesSection(view.groupId, view.ledger, userId, attempt?.paymentDraft) : ''}
     ${checkInList(view.checkIns)}
     ${dropoutForm(view, userId, attempt?.dropoutDraft)}
+    ${deleteForm(view, userId)}
     <p class="share">Share this link to invite someone. <a href="${share}">${share}</a></p>
   `)
 }
