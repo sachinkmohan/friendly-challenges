@@ -10,7 +10,7 @@ import { recordDropout } from '../src/dropouts.ts'
 import type { GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
 import { paymentRef, readPayments } from '../src/store.ts'
-import { closeServer, cookieFor, groupWith, listen, person, setJoinedOn } from './support/fixtures.ts'
+import { CHECK_IN_TODAY, closeServer, cookieFor, groupWith, listen, person, setJoinedOn } from './support/fixtures.ts'
 
 function iso(raw: string): IsoDate {
   const day = parseIsoDate(raw)
@@ -148,12 +148,12 @@ test('nets follow check-ins and payments with nothing stored between reads', asy
     assert.equal(total(first), 0)
 
     for (const day of ['2026-11-01', '2026-11-02', '2026-11-03']) {
-      assert.deepEqual(await logCheckIn(db, ada, groupId, { day, color: 'red' }), { ok: true })
+      assert.deepEqual(await logCheckIn(db, ada, groupId, { day, color: 'red' }, CHECK_IN_TODAY), { ok: true })
     }
     assert.deepEqual(netsOf(await ledger(db, groupId, '2026-11-04')), netsOf(first))
 
     for (const day of ['2026-11-01', '2026-11-02', '2026-11-03']) {
-      assert.deepEqual(await logCheckIn(db, ada, groupId, { day, color: 'green' }), { ok: true })
+      assert.deepEqual(await logCheckIn(db, ada, groupId, { day, color: 'green' }, CHECK_IN_TODAY), { ok: true })
     }
     const green = await ledger(db, groupId, '2026-11-04')
     assert.deepEqual(netsOf(green), { [ada.id]: 2000, [grace.id]: 500, [lin.id]: -2500 })
@@ -386,7 +386,7 @@ test('a solo member owes the cause for each missed day and records payments to i
     assert.deepEqual(first.member, { userId: ada.id, displayName: 'Ada' })
     assert.deepEqual([first.owedMinor, first.paidMinor, first.dueMinor], [1500, 0, 1500])
 
-    assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-02', color: 'green' }), { ok: true })
+    assert.deepEqual(await logCheckIn(db, ada, groupId, { day: '2026-11-02', color: 'green' }, CHECK_IN_TODAY), { ok: true })
     assert.deepEqual((await soloLedger(db, groupId, '2026-11-04')).owedMinor, 1000)
 
     assert.deepEqual(await pay({ payeeId: ada.id }), { ok: false, failure: 'bad_payee' })

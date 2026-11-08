@@ -6,7 +6,7 @@ import { logCheckIn } from '../src/checkins.ts'
 import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
 import type { GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
-import { closeServer, cookieFor, groupWith, listen, person, setJoinedOn } from './support/fixtures.ts'
+import { CHECK_IN_TODAY, closeServer, cookieFor, groupWith, listen, person, setJoinedOn } from './support/fixtures.ts'
 
 function iso(raw: string): IsoDate {
   const day = parseIsoDate(raw)
@@ -122,8 +122,8 @@ async function activeCrew(): Promise<Crew> {
 test('the home heatmap reads only the signed-in member days in active challenges', async () => {
   const { db, ada, grace, groupId } = await activeCrew()
   try {
-    await logCheckIn(db, ada, groupId, { day: '2026-11-02', color: 'green' })
-    await logCheckIn(db, grace, groupId, { day: '2026-11-03', color: 'red' })
+    await logCheckIn(db, ada, groupId, { day: '2026-11-02', color: 'green' }, CHECK_IN_TODAY)
+    await logCheckIn(db, grace, groupId, { day: '2026-11-03', color: 'red' }, CHECK_IN_TODAY)
     const [heatmap, ...rest] = await listHeatmaps(db, ada, iso('2026-11-03'))
     assert.equal(rest.length, 0)
     assert.equal(heatmap?.groupId, groupId)
@@ -172,7 +172,7 @@ test('replacing a check-in updates the group calendar and the home heatmap', asy
       body: new URLSearchParams({ day, color }).toString(),
     })
   try {
-    await logCheckIn(db, grace, groupId, { day: '2026-11-03', color: 'green' })
+    await logCheckIn(db, grace, groupId, { day: '2026-11-03', color: 'green' }, CHECK_IN_TODAY)
     assert.equal((await log('2026-11-03', 'green')).status, 303)
 
     const before = await page(groupPath)
