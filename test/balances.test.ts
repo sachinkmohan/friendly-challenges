@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { Timestamp } from 'firebase-admin/firestore'
 import { test } from 'node:test'
 import { missedDayDebts, readLedger, recordPayment, settle, type Ledger } from '../src/balances.ts'
 import type { CalendarMember } from '../src/calendar.ts'
@@ -8,7 +9,7 @@ import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
 import { recordDropout } from '../src/dropouts.ts'
 import type { GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
-import { readPayments } from '../src/store.ts'
+import { paymentRef, readPayments } from '../src/store.ts'
 import { closeServer, cookieFor, groupWith, listen, person, setJoinedOn } from './support/fixtures.ts'
 
 function iso(raw: string): IsoDate {
@@ -225,8 +226,8 @@ test('a payment is always in the challenge currency and can go to a member who l
     assert.deepEqual(await pay(grace, grace.id), { ok: false, failure: 'bad_payee' })
     const stored = await readPayments(db, groupId)
     assert.deepEqual(
-      stored.map((row) => [row.payerId, row.payeeId, row.amountMinor, row.currency]),
-      [[ada.id, lin.id, 250, 'USD']],
+      stored.map((row) => [row.payerId, row.payee, row.amountMinor, row.currency]),
+      [[ada.id, { kind: 'member', userId: lin.id }, 250, 'USD']],
     )
   } finally {
     await closeDatabase(db)
@@ -281,6 +282,36 @@ test('the group card shows each net and who owes whom, and a recorded payment ch
     assert.equal((await fetch(`${base}${groupPath}/payment`, { headers: { cookie: linCookie } })).status, 405)
   } finally {
     await closeServer(server)
+    await closeDatabase(db)
+  }
+})
+
+test('a stored payment with no payee id is a payment to the cause, and one with no payee field is refused', async () => {
+  const db = openTestDatabase()
+  const groupId = '00000000-0000-4000-8000-000000000043'
+  const stored = (payeeId: unknown) => ({
+    payerId: 'ada',
+    ...(payeeId === undefined ? {} : { payeeId }),
+    amountMinor: 500,
+    currency: 'USD',
+    paidOn: '2026-11-03',
+    paypalRef: null,
+    createdAt: Timestamp.fromDate(new Date('2026-11-03T12:00:00Z')),
+  })
+  try {
+    await paymentRef(db, groupId, 'to-grace').set(stored('grace'))
+    await paymentRef(db, groupId, 'to-cause').set(stored(null))
+    const rows = await readPayments(db, groupId)
+    assert.deepEqual(
+      rows.map((row) => [row.id, row.payee]).sort(),
+      [
+        ['to-cause', { kind: 'cause' }],
+        ['to-grace', { kind: 'member', userId: 'grace' }],
+      ],
+    )
+    await paymentRef(db, groupId, 'no-payee').set(stored(undefined))
+    await assert.rejects(readPayments(db, groupId))
+  } finally {
     await closeDatabase(db)
   }
 })

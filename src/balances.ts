@@ -18,6 +18,7 @@ import type { Account } from './identity.ts'
 import {
   compare,
   memberOf,
+  paymentData,
   paymentRef,
   readCheckIns,
   readGroup,
@@ -254,22 +255,26 @@ async function loadMembers(db: Database, groupId: GroupId, group: GroupDoc): Pro
 
 async function loadPayments(db: Database, groupId: GroupId): Promise<readonly Payment[]> {
   const rows = await readPayments(db, groupId)
-  const users = await readUsers(db, rows.flatMap((row) => [row.payerId, row.payeeId]))
+  const users = await readUsers(
+    db,
+    rows.flatMap((row) => (row.payee.kind === 'member' ? [row.payerId, row.payee.userId] : [row.payerId])),
+  )
   return rows
     .sort(
       (a, b) =>
         compare(b.paidOn, a.paidOn) || b.createdAt.toMillis() - a.createdAt.toMillis() || compare(a.id, b.id),
     )
     .flatMap((row): Payment[] => {
+      if (row.payee.kind !== 'member') return []
       const payer = users.get(row.payerId)
-      const payee = users.get(row.payeeId)
+      const payee = users.get(row.payee.userId)
       if (!payer || !payee) return []
       return [
         {
           id: row.id,
           payerId: row.payerId,
           payerName: payer.displayName,
-          payeeId: row.payeeId,
+          payeeId: row.payee.userId,
           payeeName: payee.displayName,
           amountMinor: row.amountMinor,
           currency: row.currency as CurrencyCode,
@@ -334,14 +339,14 @@ export async function recordPayment(
       }
       const payment: PaymentDoc = {
         payerId: account.id,
-        payeeId: input.payeeId,
+        payee: { kind: 'member', userId: input.payeeId },
         amountMinor: amount.minor,
         currency: terms.currency,
         paidOn,
         paypalRef: ref.ref,
         createdAt: Timestamp.now(),
       }
-      tx.create(paymentRef(db, groupId, crypto.randomUUID()), payment)
+      tx.create(paymentRef(db, groupId, crypto.randomUUID()), paymentData(payment))
     })
     return { ok: true }
   } catch (error) {

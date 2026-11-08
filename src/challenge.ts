@@ -447,7 +447,7 @@ function storedFrom(doc: ChallengeDoc): StoredChallenge {
   }
 }
 
-function challengeDoc(terms: ChallengeTerms, phase: 'draft' | 'active'): ChallengeDoc {
+function draftDoc(terms: ChallengeTerms): ChallengeDoc {
   return {
     name: terms.name,
     typeKind: terms.type.kind === 'custom' ? 'custom' : terms.type.preset,
@@ -456,7 +456,7 @@ function challengeDoc(terms: ChallengeTerms, phase: 'draft' | 'active'): Challen
     stakeMinor: terms.stakeMinor,
     startsOn: terms.startsOn,
     endsOn: terms.endsOn,
-    phase,
+    phase: 'draft',
   }
 }
 
@@ -544,7 +544,7 @@ export async function saveChallenge(
     if (datesMoved && Object.values(group.rhythms).some((rhythm) => rhythm.anchorOn > terms.endsOn)) {
       throw new CommandError('anchor_after_end')
     }
-    return { challenge: challengeDoc(terms, 'draft') }
+    return { challenge: draftDoc(terms) }
   })
 }
 

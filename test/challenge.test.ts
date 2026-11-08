@@ -20,7 +20,7 @@ import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
 import { joinGroup, parseGroupId, type GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
 import { safeReturnPath } from '../src/page.ts'
-import { activeMemberIds, readGroup, utcToday, type ChallengeDoc } from '../src/store.ts'
+import { activeMemberIds, groupRef, readGroup, utcToday, type ChallengeDoc } from '../src/store.ts'
 import { closeServer, cookieFor, groupWith, listen, person, post, setChallengeDates, setLeftOn } from './support/fixtures.ts'
 
 function day(value: string) {
@@ -531,6 +531,51 @@ test('the group card saves the stake, starts at three members, and then freezes'
     assert.equal(activeMemberIds(group).length, 5)
   } finally {
     await closeServer(server)
+    await closeDatabase(db)
+  }
+})
+
+const storedTerms = {
+  name: 'No sweets',
+  typeKind: 'no_sugar',
+  customLabel: null,
+  currency: 'USD',
+  stakeMinor: 500,
+  startsOn: '2026-11-01',
+  endsOn: '2026-11-30',
+}
+
+async function storedChallenge(db: Database, challenge: Record<string, unknown>): Promise<string> {
+  const groupId = '00000000-0000-4000-8000-000000000042'
+  await groupRef(db, groupId).set({
+    name: 'Stored',
+    createdBy: 'ada',
+    memberIds: ['ada'],
+    members: { ada: { joinedOn: '2026-11-01', leftOn: null } },
+    challenge,
+    rhythms: {},
+  })
+  return groupId
+}
+
+test('a started challenge stored before causes reads as one with no cause, and a draft never carries one', async () => {
+  const db = openTestDatabase()
+  try {
+    const legacy = await storedChallenge(db, { ...storedTerms, phase: 'active' })
+    assert.deepEqual((await readGroup(db, legacy))?.challenge, { ...storedTerms, phase: 'active', cause: null })
+
+    const solo = await storedChallenge(db, { ...storedTerms, phase: 'active', cause: 'Food bank' })
+    assert.deepEqual((await readGroup(db, solo))?.challenge, { ...storedTerms, phase: 'active', cause: 'Food bank' })
+
+    const draft = await storedChallenge(db, { ...storedTerms, phase: 'draft' })
+    assert.deepEqual((await readGroup(db, draft))?.challenge, { ...storedTerms, phase: 'draft' })
+
+    const draftWithCause = await storedChallenge(db, { ...storedTerms, phase: 'draft', cause: 'Food bank' })
+    await assert.rejects(readGroup(db, draftWithCause))
+
+    const badCause = await storedChallenge(db, { ...storedTerms, phase: 'active', cause: 7 })
+    await assert.rejects(readGroup(db, badCause))
+  } finally {
     await closeDatabase(db)
   }
 })
