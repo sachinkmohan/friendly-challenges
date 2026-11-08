@@ -14,13 +14,13 @@ export function parseGroupId(raw: string): GroupId | null {
 }
 
 export type CreateGroupResult =
-  | { ok: true; groupId: GroupId }
+  | { ok: true; groupId: GroupId; name: string }
   | { ok: false; failure: 'name_empty' | 'name_too_long' }
 
 type JoinFailure = 'group_missing' | 'group_full' | 'solo_started'
 
 export type JoinResult =
-  | { ok: true; groupId: GroupId }
+  | { ok: true; groupId: GroupId; name: string }
   | { ok: false; failure: JoinFailure }
 
 export type MemberLine = {
@@ -80,7 +80,7 @@ export const deleteFailureCopy = {
   not_confirmed: 'Tick the box to confirm you want to delete the group for everyone.',
 } as const satisfies Record<DeleteFailure, string>
 
-export type DeleteResult = { ok: true } | { ok: false; failure: DeleteFailure }
+export type DeleteResult = { ok: true; name: string } | { ok: false; failure: DeleteFailure }
 
 class JoinRejected extends Error {
   readonly failure: JoinFailure
@@ -109,23 +109,24 @@ export async function createGroup(
     rhythms: {},
   }
   await groupRef(db, groupId).create(group)
-  return { ok: true, groupId }
+  return { ok: true, groupId, name }
 }
 
 export async function joinGroup(db: Database, account: Account, groupId: GroupId): Promise<JoinResult> {
   try {
-    await db.runTransaction(async (tx) => {
+    const name = await db.runTransaction(async (tx) => {
       const group = await readGroup(db, groupId, tx)
       if (!group) throw new JoinRejected('group_missing')
-      if (group.members[account.id]) return
+      if (group.members[account.id]) return group.name
       if (isStartedSolo(group)) throw new JoinRejected('solo_started')
       if (activeMemberIds(group).length >= ACTIVE_MEMBER_CAP) throw new JoinRejected('group_full')
       tx.update(groupRef(db, groupId), {
         memberIds: [...group.memberIds, account.id],
         [`members.${account.id}`]: { joinedOn: utcToday(), leftOn: null },
       })
+      return group.name
     })
-    return { ok: true, groupId }
+    return { ok: true, groupId, name }
   } catch (error) {
     if (error instanceof JoinRejected) return { ok: false, failure: error.failure }
     throw error
@@ -135,18 +136,18 @@ export async function joinGroup(db: Database, account: Account, groupId: GroupId
 // The group document goes first, inside the creator check, so a check-in or payment racing the delete
 // finds no group and is refused. The sweep then removes the check-ins and payments under it.
 export async function deleteGroup(db: Database, actor: Account, groupId: GroupId, confirmed: boolean): Promise<DeleteResult> {
-  const failure = await db.runTransaction(async (tx): Promise<DeleteFailure | null> => {
+  const outcome = await db.runTransaction(async (tx): Promise<{ failure: DeleteFailure } | { name: string }> => {
     const group = await readGroup(db, groupId, tx)
-    if (!group) return 'group_missing'
-    if (memberOf(group, actor.id)?.leftOn !== null) return 'not_member'
-    if (group.createdBy !== actor.id) return 'not_creator'
-    if (!confirmed) return 'not_confirmed'
+    if (!group) return { failure: 'group_missing' }
+    if (memberOf(group, actor.id)?.leftOn !== null) return { failure: 'not_member' }
+    if (group.createdBy !== actor.id) return { failure: 'not_creator' }
+    if (!confirmed) return { failure: 'not_confirmed' }
     tx.delete(groupRef(db, groupId))
-    return null
+    return { name: group.name }
   })
-  if (failure) return { ok: false, failure }
+  if ('failure' in outcome) return { ok: false, failure: outcome.failure }
   await db.recursiveDelete(groupRef(db, groupId))
-  return { ok: true }
+  return { ok: true, name: outcome.name }
 }
 
 export async function viewGroup(

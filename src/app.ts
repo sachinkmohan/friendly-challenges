@@ -34,10 +34,12 @@ import {
   type GroupRoute,
 } from './page.ts'
 import { accountForSession, createSession, deleteSession } from './sessions.ts'
+import { checkInToast, takeToast, toastCookie, type Toast, type ToastReceipt } from './toasts.ts'
 
 const SESSION_COOKIE = 'session'
 const SESSION_MAX_AGE = 60 * 60 * 24 * 30
 const FORM_LIMIT_BYTES = 4096
+const NO_TOAST: ToastReceipt = { text: null, cookies: [] }
 
 export type AppDeps = {
   db: Database
@@ -55,13 +57,13 @@ function requestOrigin(req: IncomingMessage): string {
   return `${proto}://${host}`
 }
 
-function sendHtml(res: ServerResponse, status: number, body: string, cookies: string[] = []): void {
+function sendHtml(res: ServerResponse, status: number, body: string, cookies: readonly string[] = []): void {
   const headers: Record<string, string | string[] | number> = {
     'Content-Type': 'text/html; charset=utf-8',
     'Cache-Control': 'no-store',
     'Content-Length': Buffer.byteLength(body),
   }
-  if (cookies.length > 0) headers['Set-Cookie'] = cookies
+  if (cookies.length > 0) headers['Set-Cookie'] = [...cookies]
   res.writeHead(status, headers)
   res.end(body)
 }
@@ -97,16 +99,20 @@ export function createApp(deps: AppDeps) {
     try {
       if (method === 'GET' && path === '/') {
         const viewer = await viewerFrom(req, deps)
+        const toast = takeToast(req.headers.cookie)
         const home =
           viewer.state === 'signed_out'
-            ? renderHome(viewer)
-            : renderHome({
-                state: 'signed_in',
-                account: viewer.account,
-                groups: await listHomeGroups(deps.db, viewer.account),
-                heatmaps: await listHeatmaps(deps.db, viewer.account, today(deps)),
-              })
-        sendHtml(res, 200, home)
+            ? renderHome(viewer, toast.text)
+            : renderHome(
+                {
+                  state: 'signed_in',
+                  account: viewer.account,
+                  groups: await listHomeGroups(deps.db, viewer.account),
+                  heatmaps: await listHeatmaps(deps.db, viewer.account, today(deps)),
+                },
+                toast.text,
+              )
+        sendHtml(res, 200, home, toast.cookies)
         return
       }
 
@@ -188,16 +194,17 @@ async function handleGroup(
       sendHtml(res, 400, renderNewGroup(viewer, created.failure))
       return
     }
-    sendRedirect(res, groupHref(created.groupId), [], 303)
+    sendRedirect(res, groupHref(created.groupId), [toastCookie({ kind: 'created', group: created.name })], 303)
     return
   }
   if (route.kind === 'show') {
     if (method !== 'GET') return rejectMethod(res, 'GET')
+    const toast = takeToast(req.headers.cookie)
     if (viewer.state === 'signed_out') {
-      await sendGroupPage(res, 200, viewer, route.groupId, origin, deps)
+      await sendGroupPage(res, 200, viewer, route.groupId, origin, deps, undefined, toast)
       return
     }
-    await sendMemberPage(res, 200, viewer.account, route.groupId, origin, deps)
+    await sendMemberPage(res, 200, viewer.account, route.groupId, origin, deps, undefined, toast)
     return
   }
   if (route.kind === 'save_challenge' || route.kind === 'start_challenge' || route.kind === 'save_rhythm') {
@@ -232,7 +239,7 @@ async function handleGroup(
   }
   const joined = await joinGroup(deps.db, viewer.account, route.groupId)
   if (joined.ok) {
-    sendRedirect(res, groupHref(joined.groupId), [], 303)
+    sendRedirect(res, groupHref(joined.groupId), [toastCookie({ kind: 'joined', group: joined.name })], 303)
     return
   }
   if (joined.failure === 'group_missing') {
@@ -243,6 +250,8 @@ async function handleGroup(
 }
 
 type ChallengeRoute = Extract<GroupRoute, { kind: 'save_challenge' | 'start_challenge' | 'save_rhythm' }>
+
+type ChallengeOutcome = { ok: true; toast: Toast } | { ok: false; failure: ChallengeFailure }
 
 function challengeStatus(failure: ChallengeFailure): number {
   if (failure === 'not_member' || failure === 'not_creator') return 403
@@ -271,6 +280,7 @@ async function sendGroupPage(
   origin: string,
   deps: AppDeps,
   attempt?: ChallengeAttempt,
+  toast: ToastReceipt = NO_TOAST,
 ): Promise<void> {
   const account = viewer.state === 'signed_in' ? viewer.account : null
   const view = await viewGroup(deps.db, account, groupId)
@@ -283,11 +293,11 @@ async function sendGroupPage(
       notFound(res)
       return
     }
-    await sendMemberPage(res, status, account, groupId, origin, deps, attempt)
+    await sendMemberPage(res, status, account, groupId, origin, deps, attempt, toast)
     return
   }
   const headline = await readChallengeHeadline(deps.db, groupId)
-  sendHtml(res, status, renderGroup({ ...view, headline }, viewer, origin, attempt))
+  sendHtml(res, status, renderGroup({ ...view, headline }, viewer, origin, attempt, toast.text), toast.cookies)
 }
 
 async function sendMemberPage(
@@ -298,6 +308,7 @@ async function sendMemberPage(
   origin: string,
   deps: AppDeps,
   attempt?: ChallengeAttempt,
+  toast: ToastReceipt = NO_TOAST,
 ): Promise<void> {
   const viewer: Viewer = { state: 'signed_in', account }
   const view = await viewGroup(deps.db, account, groupId)
@@ -307,7 +318,7 @@ async function sendMemberPage(
   }
   if (view.kind !== 'members') {
     const headline = await readChallengeHeadline(deps.db, groupId)
-    sendHtml(res, status, renderGroup({ ...view, headline }, viewer, origin, attempt))
+    sendHtml(res, status, renderGroup({ ...view, headline }, viewer, origin, attempt, toast.text), toast.cookies)
     return
   }
   const loaded = await readMemberChallenge(deps.db, account, groupId)
@@ -319,7 +330,7 @@ async function sendMemberPage(
     }
     if (again.kind !== 'members') {
       const headline = await readChallengeHeadline(deps.db, groupId)
-      sendHtml(res, status, renderGroup({ ...again, headline }, viewer, origin, attempt))
+      sendHtml(res, status, renderGroup({ ...again, headline }, viewer, origin, attempt, toast.text), toast.cookies)
       return
     }
     sendHtml(res, 500, renderMessage('Something went wrong', 'Try that again.'))
@@ -328,7 +339,7 @@ async function sendMemberPage(
   const card = loaded.card
   const checkIns = card.phase === 'active' ? await listCheckIns(deps.db, groupId) : []
   const ledger = card.phase === 'active' ? await readLedger(deps.db, groupId, today(deps)) : null
-  sendHtml(res, status, renderGroup({ ...view, challenge: card, checkIns, ledger }, viewer, origin, attempt))
+  sendHtml(res, status, renderGroup({ ...view, challenge: card, checkIns, ledger }, viewer, origin, attempt, toast.text), toast.cookies)
 }
 
 async function finishChallenge(
@@ -337,12 +348,12 @@ async function finishChallenge(
   groupId: GroupId,
   account: Account,
   deps: AppDeps,
-  result: { ok: true } | { ok: false; failure: ChallengeFailure },
+  result: ChallengeOutcome,
   drafts: Pick<ChallengeAttempt, 'draft' | 'rhythmDraft' | 'causeDraft'> = {},
   slot: 'failure' | 'startFailure' = 'failure',
 ): Promise<void> {
   if (result.ok) {
-    sendRedirect(res, groupHref(groupId), [], 303)
+    sendRedirect(res, groupHref(groupId), [toastCookie(result.toast)], 303)
     return
   }
   if (result.failure === 'group_missing') {
@@ -379,7 +390,8 @@ async function postChallenge(
   if (route.kind === 'start_challenge') {
     const input: StartInput = { cause: form.get('cause') ?? '' }
     const started = await startChallenge(deps.db, viewer.account, route.groupId, input)
-    await finishChallenge(res, origin, route.groupId, viewer.account, deps, started, { causeDraft: input.cause }, 'startFailure')
+    const result: ChallengeOutcome = started.ok ? { ok: true, toast: { kind: 'started', challenge: started.name } } : started
+    await finishChallenge(res, origin, route.groupId, viewer.account, deps, result, { causeDraft: input.cause }, 'startFailure')
     return
   }
   if (route.kind === 'save_challenge') {
@@ -393,12 +405,14 @@ async function postChallenge(
       endsOn: form.get('ends_on') ?? '',
     }
     const saved = await saveChallenge(deps.db, viewer.account, route.groupId, input)
-    await finishChallenge(res, origin, route.groupId, viewer.account, deps, saved, { draft: input })
+    const result: ChallengeOutcome = saved.ok ? { ok: true, toast: { kind: 'terms_saved', challenge: saved.name } } : saved
+    await finishChallenge(res, origin, route.groupId, viewer.account, deps, result, { draft: input })
     return
   }
   const rhythm: RhythmInput = { interval: form.get('interval') ?? '' }
   const saved = await saveRhythm(deps.db, viewer.account, route.groupId, rhythm)
-  await finishChallenge(res, origin, route.groupId, viewer.account, deps, saved, { rhythmDraft: rhythm })
+  const result: ChallengeOutcome = saved.ok ? { ok: true, toast: { kind: 'rhythm_saved', rhythm: saved.rhythm } } : saved
+  await finishChallenge(res, origin, route.groupId, viewer.account, deps, result, { rhythmDraft: rhythm })
 }
 
 async function postCheckIn(
@@ -421,7 +435,7 @@ async function postCheckIn(
   const input: CheckInInput = { day: form.get('day') ?? '', color: form.get('color') ?? '' }
   const logged = await logCheckIn(deps.db, viewer.account, groupId, input)
   if (logged.ok) {
-    sendRedirect(res, groupHref(groupId), [], 303)
+    sendRedirect(res, groupHref(groupId), [toastCookie(checkInToast(logged.day, logged.color, logged.previous))], 303)
     return
   }
   if (logged.failure === 'group_missing') {
@@ -469,7 +483,14 @@ async function postPayment(
   }
   const recorded = await recordPayment(deps.db, viewer.account, groupId, input, today(deps))
   if (recorded.ok) {
-    sendRedirect(res, groupHref(groupId), [], 303)
+    const toast: Toast = {
+      kind: 'paid',
+      amountMinor: recorded.amountMinor,
+      minorDigits: recorded.minorDigits,
+      currency: recorded.currency,
+      payee: recorded.payeeName,
+    }
+    sendRedirect(res, groupHref(groupId), [toastCookie(toast)], 303)
     return
   }
   if (recorded.failure === 'group_missing') {
@@ -509,7 +530,12 @@ async function postDropout(
   const input: DropoutInput = { memberId: form.get('member') ?? '', lastDay: form.get('last_day') ?? '' }
   const recorded = await recordDropout(deps.db, viewer.account, groupId, input, today(deps))
   if (recorded.ok) {
-    sendRedirect(res, input.memberId === viewer.account.id ? '/' : groupHref(groupId), [], 303)
+    if (input.memberId === viewer.account.id) {
+      sendRedirect(res, '/', [toastCookie({ kind: 'left', group: recorded.groupName, lastDay: recorded.lastDay })], 303)
+      return
+    }
+    const toast: Toast = { kind: 'dropped', member: recorded.memberName, lastDay: recorded.lastDay }
+    sendRedirect(res, groupHref(groupId), [toastCookie(toast)], 303)
     return
   }
   if (recorded.failure === 'group_missing') {
@@ -543,7 +569,7 @@ async function postDelete(
   if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
   const deleted = await deleteGroup(deps.db, viewer.account, groupId, form.get('confirm') === 'yes')
   if (deleted.ok) {
-    sendRedirect(res, '/', [], 303)
+    sendRedirect(res, '/', [toastCookie({ kind: 'deleted', group: deleted.name })], 303)
     return
   }
   if (deleted.failure === 'group_missing') {

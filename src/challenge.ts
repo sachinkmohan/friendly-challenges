@@ -199,14 +199,14 @@ export const challengeFailureCopy = {
 } as const satisfies Record<ChallengeFailure, string>
 
 export type SaveChallengeResult =
-  | { readonly ok: true }
+  | { readonly ok: true; readonly name: string }
   | {
       readonly ok: false
       readonly failure: TermsFailure | 'group_missing' | 'not_member' | 'not_creator' | 'frozen'
     }
 
 export type StartChallengeResult =
-  | { readonly ok: true }
+  | { readonly ok: true; readonly name: string }
   | {
       readonly ok: false
       readonly failure:
@@ -222,7 +222,7 @@ export type StartChallengeResult =
     }
 
 export type SaveRhythmResult =
-  | { readonly ok: true }
+  | { readonly ok: true; readonly rhythm: RhythmKind }
   | {
       readonly ok: false
       readonly failure:
@@ -562,16 +562,17 @@ async function changeGroup<R extends { readonly ok: boolean }>(
   account: Account,
   groupId: GroupId,
   change: (group: GroupDoc) => { readonly [field: string]: unknown } | null,
-): Promise<{ readonly ok: true } | { readonly ok: false; readonly failure: FailureOf<R> }> {
+): Promise<{ readonly ok: true; readonly group: GroupDoc } | { readonly ok: false; readonly failure: FailureOf<R> }> {
   try {
-    await db.runTransaction(async (tx) => {
+    const read = await db.runTransaction(async (tx) => {
       const group = await readGroup(db, groupId, tx)
       if (!group) throw new CommandError('group_missing')
       if (!isActiveMember(group, account.id)) throw new CommandError('not_member')
       const fields = change(group)
       if (fields) tx.update(groupRef(db, groupId), fields)
+      return group
     })
-    return { ok: true }
+    return { ok: true, group: read }
   } catch (error) {
     if (error instanceof CommandError) return { ok: false, failure: error.failure as FailureOf<R> }
     throw error
@@ -586,7 +587,7 @@ export async function saveChallenge(
 ): Promise<SaveChallengeResult> {
   const parsed = parseChallengeInput(input)
   if (!parsed.ok) return parsed
-  return changeGroup<SaveChallengeResult>(db, account, groupId, (group) => {
+  const changed = await changeGroup<SaveChallengeResult>(db, account, groupId, (group) => {
     requireCreator(group, account)
     const minorDigits = minorDigitsOf(parsed.value.currency)
     if (minorDigits === null) throw new CommandError('bad_currency')
@@ -607,6 +608,7 @@ export async function saveChallenge(
     }
     return { challenge: draftDoc(terms) }
   })
+  return changed.ok ? { ok: true, name: parsed.value.name } : changed
 }
 
 export async function startChallenge(
@@ -615,7 +617,7 @@ export async function startChallenge(
   groupId: GroupId,
   input: StartInput,
 ): Promise<StartChallengeResult> {
-  return changeGroup<StartChallengeResult>(db, account, groupId, (group) => {
+  const changed = await changeGroup<StartChallengeResult>(db, account, groupId, (group) => {
     requireCreator(group, account)
     if (group.challenge?.phase === 'active') return null
     const unmet = startChecks(group).find((check) => !check.done)
@@ -628,6 +630,9 @@ export async function startChallenge(
     if (!cause.ok) throw new CommandError(cause.failure)
     return { 'challenge.phase': 'active', 'challenge.cause': cause.name }
   })
+  if (!changed.ok) return changed
+  if (!changed.group.challenge) throw new Error('challenge')
+  return { ok: true, name: changed.group.challenge.name }
 }
 
 export async function saveRhythm(
@@ -637,8 +642,9 @@ export async function saveRhythm(
   input: RhythmInput,
 ): Promise<SaveRhythmResult> {
   if (!isRhythmKind(input.interval)) return { ok: false, failure: 'bad_interval' }
-  const rhythm: RhythmDoc = { kind: input.interval }
-  return changeGroup<SaveRhythmResult>(db, account, groupId, (group) => {
+  const kind = input.interval
+  const rhythm: RhythmDoc = { kind }
+  const changed = await changeGroup<SaveRhythmResult>(db, account, groupId, (group) => {
     if (!group.challenge) throw new CommandError('no_challenge')
     const current = rhythmOf(group, account.id)
     if (group.challenge.phase === 'active' && current) {
@@ -647,6 +653,7 @@ export async function saveRhythm(
     }
     return { [`rhythms.${account.id}`]: rhythm }
   })
+  return changed.ok ? { ok: true, rhythm: kind } : changed
 }
 
 export async function readChallengeHeadline(db: Database, groupId: GroupId): Promise<ChallengeHeadline | null> {

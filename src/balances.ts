@@ -138,7 +138,15 @@ export const paymentFailureCopy = {
   ref_too_long: `Use ${PAYPAL_REF_MAX} characters or fewer for the reference.`,
 } as const satisfies Record<PaymentFailure, string>
 
-export type RecordPaymentResult = { readonly ok: true } | { readonly ok: false; readonly failure: PaymentFailure }
+export type RecordPaymentResult =
+  | {
+      readonly ok: true
+      readonly amountMinor: number
+      readonly currency: CurrencyCode
+      readonly minorDigits: number
+      readonly payeeName: string
+    }
+  | { readonly ok: false; readonly failure: PaymentFailure }
 
 function addMinor(left: number, right: number): number {
   const sum = left + right
@@ -399,7 +407,7 @@ export async function recordPayment(
   const ref = parsePaypalRef(input.paypalRef)
   if (!ref.ok) return { ok: false, failure: 'ref_too_long' }
   try {
-    await db.runTransaction(async (tx) => {
+    const recorded = await db.runTransaction(async (tx) => {
       const group = await readGroup(db, groupId, tx)
       if (!group) throw new PaymentRejected('group_missing')
       if (memberOf(group, account.id)?.leftOn !== null) throw new PaymentRejected('not_member')
@@ -420,8 +428,18 @@ export async function recordPayment(
         createdAt: Timestamp.now(),
       }
       tx.create(paymentRef(db, groupId, crypto.randomUUID()), paymentData(payment))
+      return { payee, stakesGo: terms.stakesGo, amountMinor: amount.minor, currency: terms.currency, minorDigits: terms.minorDigits }
     })
-    return { ok: true }
+    const users = await readUsers(db, recorded.payee.kind === 'member' ? [recorded.payee.userId] : [])
+    const name = payeeName(recorded.payee, recorded.stakesGo, users)
+    if (name === null) throw new Error('payee')
+    return {
+      ok: true,
+      amountMinor: recorded.amountMinor,
+      currency: recorded.currency,
+      minorDigits: recorded.minorDigits,
+      payeeName: name,
+    }
   } catch (error) {
     if (error instanceof PaymentRejected) return { ok: false, failure: error.failure }
     throw error
