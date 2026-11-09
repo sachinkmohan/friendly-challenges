@@ -15,7 +15,7 @@ const signedOut = {
   state: 'signed_out',
   firebase: { apiKey: 'key', authDomain: 'friendly.firebaseapp.com', projectId: 'friendly' },
   origin: 'https://friendlychallenges.netlify.app',
-  browser: { inApp: false, os: 'other' },
+  browser: { inApp: false, os: 'other', iosInstall: null },
 } as const
 
 test('every page is the same phone shell, full screen on a phone', () => {
