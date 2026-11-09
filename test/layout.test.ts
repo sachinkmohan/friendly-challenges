@@ -52,8 +52,9 @@ test('every page is the same phone shell, full screen on a phone', () => {
     assert.match(phoneRule, /\.device \{ width: 100%; height: auto; padding: 0; border-radius: 0; box-shadow: none; \}/)
     assert.match(phoneRule, /\.indicator \{ display: none; \}/)
     assert.match(html, /<meta name="theme-color" content="#fffdf8">/)
-    assert.doesNotMatch(html, /rel="manifest"/)
-    assert.doesNotMatch(html, /apple-mobile-web-app/)
+    assert.match(html, /<link rel="manifest" href="\/manifest.webmanifest">/)
+    assert.match(html, /<link rel="apple-touch-icon" href="\/apple-touch-icon.png">/)
+    assert.match(html, /navigator\.serviceWorker\.register\('\/sw.js'\)/)
   }
   const preview = pages[4]
   assert.match(preview, /class="screen is-current"/)
