@@ -69,7 +69,7 @@ function encodePng(width: number, height: number, rgba: Buffer): Buffer {
 
 const manifest = {
   name: 'Friendly challenges',
-  short_name: 'Challenges',
+  short_name: 'Friendly challenges',
   start_url: '/',
   scope: '/',
   display: 'standalone',
@@ -118,7 +118,7 @@ export const installAssets: ReadonlyMap<string, InstallAsset> = new Map([
 export const installHead = `<link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-  <meta name="apple-mobile-web-app-title" content="Challenges">`
+  <meta name="apple-mobile-web-app-title" content="Friendly challenges">`
 
 const iconAttrs = 'class="install-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"'
 const SHARE_ICON = `<svg ${iconAttrs}><path d="M8.5 9.5H7a2 2 0 0 0-2 2V19a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7.5a2 2 0 0 0-2-2h-1.5"/><path d="M12 14.5V3M8.5 6.5 12 3l3.5 3.5"/></svg>`
@@ -155,7 +155,7 @@ export function installPrompt(iosInstall: IosInstall | null): string {
 
 export function installCard(iosInstall: IosInstall): string {
   return `<article class="card install-card" hidden>
-        <h2>Put Challenges on your Home Screen</h2>
+        <h2>Put Friendly challenges on your Home Screen</h2>
         ${iosSteps(iosInstall)}
         <button type="button" class="install-done secondary">Done</button>
       </article>`
