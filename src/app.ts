@@ -20,6 +20,7 @@ import { recordDropout, type DropoutFailure, type DropoutInput } from './dropout
 import { deleteGroup, dropGroupName, joinGroup, listHomeGroups, type GroupId } from './groups.ts'
 import { loadGroupPage, type GroupPage } from './grouppage.ts'
 import { readBrowser } from './browser.ts'
+import { installAssets, OFFLINE_PATH } from './install.ts'
 import { googleIdentity, type Account, type AuthFailure, type FirebaseWebConfig, type IdToken, type Viewer } from './identity.ts'
 import {
   groupHref,
@@ -101,6 +102,23 @@ export function createApp(deps: AppDeps) {
     const method = req.method ?? 'GET'
 
     try {
+      const asset = installAssets.get(path)
+      if (asset) {
+        if (method !== 'GET') return rejectMethod(res, 'GET')
+        res.writeHead(200, {
+          'Content-Type': asset.contentType,
+          'Cache-Control': asset.cacheControl,
+          'Content-Length': Buffer.byteLength(asset.body),
+        })
+        res.end(asset.body)
+        return
+      }
+
+      if (method === 'GET' && path === OFFLINE_PATH) {
+        sendHtml(res, 200, renderMessage('You are offline', 'Connect to the internet, then try again.'))
+        return
+      }
+
       if (method === 'GET' && path === '/') {
         const viewer = await viewerFrom(req, deps)
         const toast = takeToast(req.headers.cookie)
@@ -113,6 +131,7 @@ export function createApp(deps: AppDeps) {
                   account: viewer.account,
                   groups: await listHomeGroups(deps.db, viewer.account),
                   heatmaps: await listHeatmaps(deps.db, viewer.account, today(deps)),
+                  browser: readBrowser(req.headers['user-agent']),
                 },
                 toast.text,
               )

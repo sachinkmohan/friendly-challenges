@@ -15,7 +15,7 @@ const signedOut = {
   state: 'signed_out',
   firebase: { apiKey: 'key', authDomain: 'friendly.firebaseapp.com', projectId: 'friendly' },
   origin: 'https://friendlychallenges.netlify.app',
-  browser: { inApp: false, os: 'other' },
+  browser: { inApp: false, os: 'other', iosInstall: null },
 } as const
 
 test('every page is the same phone shell, full screen on a phone', () => {
@@ -23,7 +23,7 @@ test('every page is the same phone shell, full screen on a phone', () => {
   if (!groupId) throw new Error('fixture group id')
   const pages = [
     renderHome(signedOut),
-    renderHome({ state: 'signed_in', account, groups: [], heatmaps: [] }),
+    renderHome({ state: 'signed_in', account, groups: [], heatmaps: [], browser: signedOut.browser }),
     renderNewChallenge(signedOut),
     renderNewChallenge({ state: 'signed_in', account }),
     renderGroup(
@@ -52,8 +52,9 @@ test('every page is the same phone shell, full screen on a phone', () => {
     assert.match(phoneRule, /\.device \{ width: 100%; height: auto; padding: 0; border-radius: 0; box-shadow: none; \}/)
     assert.match(phoneRule, /\.indicator \{ display: none; \}/)
     assert.match(html, /<meta name="theme-color" content="#fffdf8">/)
-    assert.doesNotMatch(html, /rel="manifest"/)
-    assert.doesNotMatch(html, /apple-mobile-web-app/)
+    assert.match(html, /<link rel="manifest" href="\/manifest.webmanifest">/)
+    assert.match(html, /<link rel="apple-touch-icon" href="\/apple-touch-icon.png">/)
+    assert.match(html, /navigator\.serviceWorker\.register\('\/sw.js'\)/)
   }
   const preview = pages[4]
   assert.match(preview, /class="screen is-current"/)
@@ -70,7 +71,7 @@ test('signed-out shell keeps Google sign-in on the phone screens', () => {
 })
 
 test('signed-in shell keeps the account card and sign-out', () => {
-  const html = renderHome({ state: 'signed_in', account, groups: [], heatmaps: [] })
+  const html = renderHome({ state: 'signed_in', account, groups: [], heatmaps: [], browser: signedOut.browser })
   assert.match(html, /Hello, Ada/)
   assert.match(html, /You are not in a challenge yet/)
   assert.match(html, /href="\/groups\/new"/)
@@ -89,6 +90,7 @@ test('home keeps your groups apart from creating a new one', () => {
     account,
     groups: [{ groupId, label: '100 Days of Writing', activeCount: 2 }],
     heatmaps: [],
+    browser: signedOut.browser,
   })
   const yours = html.indexOf('Your challenges')
   const group = html.indexOf('100 Days of Writing')
