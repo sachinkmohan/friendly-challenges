@@ -97,12 +97,12 @@ test('the creator deletes from the group page and lands on home, and other membe
   const graceCookie = await cookieFor(db, grace)
   const page = async (cookie: string) => fetch(`${base}/groups/${groupId}`, { headers: { cookie } })
   try {
-    assert.match(await (await page(adaCookie)).text(), /Delete group/)
-    assert.doesNotMatch(await (await page(graceCookie)).text(), /Delete group/)
+    assert.match(await (await page(adaCookie)).text(), /Delete challenge/)
+    assert.doesNotMatch(await (await page(graceCookie)).text(), /Delete challenge/)
 
     const byMember = await post(base, `/groups/${groupId}/delete`, graceCookie, 'confirm=yes')
     assert.equal(byMember.status, 403)
-    assert.match(await byMember.text(), /Only the person who made the group can delete it\./)
+    assert.match(await byMember.text(), /Only the person who made the challenge can delete it\./)
 
     const unconfirmed = await post(base, `/groups/${groupId}/delete`, adaCookie, '')
     assert.equal(unconfirmed.status, 400)

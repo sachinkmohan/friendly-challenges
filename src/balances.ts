@@ -128,10 +128,10 @@ export type PaymentFailure =
   | 'ref_too_long'
 
 export const paymentFailureCopy = {
-  group_missing: 'That group does not exist.',
-  not_member: 'Join the group before you record a payment.',
+  group_missing: 'That challenge does not exist.',
+  not_member: 'Join the challenge before you record a payment.',
   not_active: 'Payments open once the challenge has started.',
-  bad_payee: 'Pick someone else in the group.',
+  bad_payee: 'Pick someone else in the challenge.',
   amount_not_positive: 'Type an amount above zero.',
   amount_too_large: `Use ${PAYMENT_MINOR_MAX} minor units or fewer.`,
   bad_date: 'Use a real date.',

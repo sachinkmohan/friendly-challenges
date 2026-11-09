@@ -20,10 +20,10 @@ export type DropoutFailure =
   | 'future_day'
 
 export const dropoutFailureCopy = {
-  group_missing: 'That group does not exist.',
-  not_member: 'Join the group before you record a dropout.',
-  not_allowed: 'Only that member or the person who made the group can record this.',
-  bad_member: 'Pick someone who is still in the group.',
+  group_missing: 'That challenge does not exist.',
+  not_member: 'Join the challenge before you record a dropout.',
+  not_allowed: 'Only that member or the person who made the challenge can record this.',
+  bad_member: 'Pick someone who is still in the challenge.',
   bad_day: 'Use a real date.',
   before_join: 'Pick a last day on or after the day they joined.',
   future_day: 'Pick a last day that is today or earlier.',

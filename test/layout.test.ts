@@ -72,7 +72,7 @@ test('signed-out shell keeps Google sign-in on the phone screens', () => {
 test('signed-in shell keeps the account card and sign-out', () => {
   const html = renderHome({ state: 'signed_in', account, groups: [], heatmaps: [] })
   assert.match(html, /Hello, Ada/)
-  assert.match(html, /You are not in a group yet/)
+  assert.match(html, /You are not in a challenge yet/)
   assert.match(html, /href="\/groups\/new"/)
   assert.doesNotMatch(html, /Your group will use this account/)
   assert.match(html, /ada@example.com/)
@@ -90,11 +90,11 @@ test('home keeps your groups apart from creating a new one', () => {
     groups: [{ groupId, label: '100 Days of Writing', activeCount: 2 }],
     heatmaps: [],
   })
-  const yours = html.indexOf('Your groups')
+  const yours = html.indexOf('Your challenges')
   const group = html.indexOf('100 Days of Writing')
   const fresh = html.indexOf('Start something new')
   const create = html.indexOf('href="/groups/new"')
-  assert.ok(yours > -1 && yours < group, 'groups sit under a Your groups label')
+  assert.ok(yours > -1 && yours < group, 'groups sit under a Your challenges label')
   assert.ok(group < fresh && fresh < create, 'creating a group sits in its own later section')
   assert.match(html, /<a href="\/groups\/[^"]+"><span class="group-name">100 Days of Writing<\/span><span class="count">2 active<\/span>/)
   assert.match(html, /<div class="new-group">/)

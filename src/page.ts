@@ -664,7 +664,7 @@ export function safeReturnPath(raw: string | null): string {
 }
 
 function homeGroups(groups: readonly HomeGroup[]): string {
-  if (groups.length === 0) return '<p>You are not in a group yet.</p>'
+  if (groups.length === 0) return '<p>You are not in a challenge yet.</p>'
   const items = groups
     .map((group) => {
       const href = escapeHtml(groupHref(group.groupId))
@@ -672,7 +672,7 @@ function homeGroups(groups: readonly HomeGroup[]): string {
       return `<li><a href="${href}"><span class="group-name">${name}</span><span class="count">${activeCountText(group.activeCount)}</span><span class="chevron" aria-hidden="true">›</span></a></li>`
     })
     .join('')
-  return `<p class="section-title">Your groups</p><ul class="groups">${items}</ul>`
+  return `<p class="section-title">Your challenges</p><ul class="groups">${items}</ul>`
 }
 
 const WEEKDAY_LABELS = ['', 'Mon', '', 'Wed', '', 'Fri', ''] as const
@@ -719,7 +719,7 @@ function signedOutScreens(viewer: SignedOut): string {
     <section id="home" class="screen">
       <article class="card">
         <h2>Sign in</h2>
-        <p>Sign in with the Google account you will use for your group.</p>
+        <p>Sign in with the Google account you will use for your challenges.</p>
         ${signInControl(viewer, '/')}
       </article>
     </section>
@@ -744,8 +744,8 @@ function signedInScreens(account: Account, groups: readonly HomeGroup[], heatmap
         ${heatmaps.map(heatmapGrid).join('')}
         <div class="new-group">
           <p class="section-title">Start something new</p>
-          <p class="field-hint">Make a new group and invite up to 4 friends.</p>
-          <a class="button" href="${groupsRoot}/new">Create a group</a>
+          <p class="field-hint">Set the terms, then invite up to 4 friends or go solo.</p>
+          <a class="button" href="${groupsRoot}/new">Create a challenge</a>
         </div>
       </article>
     </section>
@@ -1194,10 +1194,10 @@ function deleteForm(view: Extract<GroupView, { kind: 'members' }>, userId: strin
   if (userId !== view.creatorId) return ''
   const action = escapeHtml(`${groupHref(view.groupId)}${deleteSuffix}`)
   return `<form method="post" action="${action}">
-      <p class="grid-title">Delete this group</p>
+      <p class="grid-title">Delete this challenge</p>
       <p>This removes the challenge, every check-in, and every payment for everyone. It cannot be undone.</p>
       <label class="confirm"><input type="checkbox" name="confirm" value="yes" required> Delete it for everyone</label>
-      <button type="submit" class="danger">Delete group</button>
+      <button type="submit" class="danger">Delete challenge</button>
     </form>`
 }
 
@@ -1205,7 +1205,7 @@ function dropNameForm(view: Extract<GroupView, { kind: 'members' }>, challenge: 
   if (userId !== view.creatorId || !view.hasGroupName || challenge.phase === 'unopened') return ''
   const action = escapeHtml(`${groupHref(view.groupId)}${dropNameSuffix}`)
   return `<form method="post" action="${action}">
-      <p class="field-hint">This is the group name you gave it. The challenge is called ${escapeHtml(challenge.terms.name)}.</p>
+      <p class="field-hint">It still shows the name you first gave it. The challenge is called ${escapeHtml(challenge.terms.name)}.</p>
       <button type="submit" class="secondary">Use the challenge name instead</button>
     </form>`
 }
@@ -1282,7 +1282,7 @@ function memberItem(member: MemberLine, rhythms: readonly RhythmLine[]): string 
 function joinControl(groupId: GroupId, viewer: Viewer): string {
   if (viewer.state === 'signed_out') return signInControl(viewer, groupHref(groupId))
   const action = escapeHtml(`${groupHref(groupId)}${joinSuffix}`)
-  return `<form method="post" action="${action}"><button type="submit">Join group</button></form>`
+  return `<form method="post" action="${action}"><button type="submit">Join challenge</button></form>`
 }
 
 function headlineText(headline: ChallengeHeadline | null): string {
@@ -1307,7 +1307,7 @@ export function renderGroup(
   const count = `<p class="count">${activeCountText(view.activeCount)}</p>`
   const failure = failureParagraph(attempt)
   if (view.kind === 'full') {
-    return groupCard(`${title}${count}${failure}${headlineText(view.headline)}<p>This group is full.</p>`, toast)
+    return groupCard(`${title}${count}${failure}${headlineText(view.headline)}<p>This challenge is full.</p>`, toast)
   }
   if (view.kind === 'solo') {
     return groupCard(

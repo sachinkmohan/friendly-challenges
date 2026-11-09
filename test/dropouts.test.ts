@@ -230,10 +230,10 @@ test('the group card records a dropout and the leaver keeps a calendar row with 
 
     const notAllowed = await post(base, dropoutPath, graceCookie, fields({ member: lin.id, last_day: '2026-11-03' }))
     assert.equal(notAllowed.status, 403)
-    assert.match(await notAllowed.text(), /Only that member or the person who made the group can record this\./)
+    assert.match(await notAllowed.text(), /Only that member or the person who made the challenge can record this\./)
     const outsider = await post(base, dropoutPath, noorCookie, fields({ member: lin.id, last_day: '2026-11-03' }))
     assert.equal(outsider.status, 403)
-    assert.match(await outsider.text(), /Join the group before you record a dropout\./)
+    assert.match(await outsider.text(), /Join the challenge before you record a dropout\./)
 
     const future = await post(base, dropoutPath, adaCookie, fields({ member: grace.id, last_day: '2026-11-07' }))
     assert.equal(future.status, 400)
@@ -262,7 +262,7 @@ test('the group card records a dropout and the leaver keeps a calendar row with 
 
     const lateCheckIn = await post(base, `${groupPath}/check-in`, linCookie, fields({ day: '2026-11-04', color: 'green' }))
     assert.equal(lateCheckIn.status, 400)
-    assert.match(await lateCheckIn.text(), /You were not in the group on that day\./)
+    assert.match(await lateCheckIn.text(), /You were not in the challenge on that day\./)
     assert.deepEqual(await readCheckIns(db, groupId), [])
   } finally {
     await closeServer(server)

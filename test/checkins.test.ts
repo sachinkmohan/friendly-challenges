@@ -332,7 +332,7 @@ test('the group card logs a day and lists who logged what', async () => {
 
     const stranger = await post(base, checkInPath, outsiderCookie, fields({ day: '2026-11-03', color: 'green' }))
     assert.equal(stranger.status, 403)
-    assert.match(await stranger.text(), /Join the group before you log a day\./)
+    assert.match(await stranger.text(), /Join the challenge before you log a day\./)
 
     const amber = await post(base, checkInPath, adaCookie, fields({ day: '2026-11-05', color: 'amber' }))
     assert.equal(amber.status, 400)

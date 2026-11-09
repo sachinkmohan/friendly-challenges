@@ -58,10 +58,10 @@ function isSolo(group: GroupDoc): boolean {
 export type DeleteFailure = 'group_missing' | 'not_member' | 'not_creator' | 'not_confirmed'
 
 export const deleteFailureCopy = {
-  group_missing: 'That group does not exist.',
-  not_member: 'Join the group before you delete it.',
-  not_creator: 'Only the person who made the group can delete it.',
-  not_confirmed: 'Tick the box to confirm you want to delete the group for everyone.',
+  group_missing: 'That challenge does not exist.',
+  not_member: 'Join the challenge before you delete it.',
+  not_creator: 'Only the person who made the challenge can delete it.',
+  not_confirmed: 'Tick the box to confirm you want to delete the challenge for everyone.',
 } as const satisfies Record<DeleteFailure, string>
 
 export type DeleteResult = { ok: true; label: string } | { ok: false; failure: DeleteFailure }
