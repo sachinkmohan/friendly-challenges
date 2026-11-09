@@ -13,7 +13,7 @@ import {
 import { isColor, type CheckInColor } from './checkins.ts'
 import { parseGroupId, type GroupId } from './groups.ts'
 import type { Account } from './identity.ts'
-import { compare, memberOf, parseCheckIn, parseGroup, rhythmOf } from './store.ts'
+import { compare, labelOf, memberOf, parseCheckIn, parseGroup, rhythmOf } from './store.ts'
 
 export const DAY_MARK_LABELS = {
   green: 'Kept it',
@@ -163,7 +163,7 @@ export async function listHeatmaps(db: Database, account: Account, today: IsoDat
       const calendar = buildCalendar({ window, today }, [
         { userId: account.id, displayName: account.displayName, span, rhythm: rhythmFrom(rhythmOf(group, account.id)), colors },
       ])
-      return { groupId, name: group.name, startsOn: window.startsOn, weeks: weeksOf(calendar.rows[0]?.days ?? []) }
+      return { groupId, name: labelOf(group), startsOn: window.startsOn, weeks: weeksOf(calendar.rows[0]?.days ?? []) }
     }),
   )
   return heatmaps

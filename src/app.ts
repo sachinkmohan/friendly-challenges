@@ -237,7 +237,7 @@ async function handleGroup(
   }
   const joined = await joinGroup(deps.db, viewer.account, route.groupId)
   if (joined.ok) {
-    sendRedirect(res, groupHref(joined.groupId), [toastCookie({ kind: 'joined', group: joined.name })], 303)
+    sendRedirect(res, groupHref(joined.groupId), [toastCookie({ kind: 'joined', group: joined.label })], 303)
     return
   }
   if (joined.failure === 'group_missing') {
@@ -522,7 +522,7 @@ async function postDelete(
   if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
   const deleted = await deleteGroup(deps.db, viewer.account, groupId, form.get('confirm') === 'yes')
   if (deleted.ok) {
-    sendRedirect(res, '/', [toastCookie({ kind: 'deleted', group: deleted.name })], 303)
+    sendRedirect(res, '/', [toastCookie({ kind: 'deleted', group: deleted.label })], 303)
     return
   }
   if (deleted.failure === 'group_missing') {

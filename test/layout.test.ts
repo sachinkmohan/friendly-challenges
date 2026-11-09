@@ -27,7 +27,7 @@ test('every page is the same phone shell, full screen on a phone', () => {
     renderNewGroup(signedOut),
     renderNewGroup({ state: 'signed_in', account }),
     renderGroup(
-      { kind: 'preview', groupId, name: 'Morning run', activeCount: 1, headline: null },
+      { kind: 'preview', groupId, label: 'Morning run', activeCount: 1, headline: null },
       signedOut,
       'http://127.0.0.1:3000',
     ),
@@ -87,7 +87,7 @@ test('home keeps your groups apart from creating a new one', () => {
   const html = renderHome({
     state: 'signed_in',
     account,
-    groups: [{ groupId, name: '100 Days of Writing', activeCount: 2 }],
+    groups: [{ groupId, label: '100 Days of Writing', activeCount: 2 }],
     heatmaps: [],
   })
   const yours = html.indexOf('Your groups')

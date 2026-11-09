@@ -3,7 +3,7 @@ import type { Database } from './db.ts'
 import { parseIsoDate, type IsoDate } from './challenge.ts'
 import type { GroupId } from './groups.ts'
 import type { Account } from './identity.ts'
-import { groupRef, memberOf, readGroup, readUsers } from './store.ts'
+import { groupRef, labelOf, memberOf, readGroup, readUsers } from './store.ts'
 
 export type DropoutInput = {
   readonly memberId: string
@@ -62,7 +62,7 @@ export async function recordDropout(
       if (lastDay < target.joinedOn) throw new DropoutRejected('before_join')
       if (lastDay > today) throw new DropoutRejected('future_day')
       tx.update(groupRef(db, groupId), new FieldPath('members', input.memberId, 'leftOn'), lastDay)
-      return { groupName: group.name, lastDay }
+      return { groupName: labelOf(group), lastDay }
     })
     const member = (await readUsers(db, [input.memberId])).get(input.memberId)
     if (!member) throw new Error('member user')

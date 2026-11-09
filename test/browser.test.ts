@@ -133,7 +133,7 @@ test('an in-app browser on Android gets the invite link and an open-in-browser b
   const groupId = parseGroupId('00000000-0000-4000-8000-000000000001')
   if (!groupId) throw new Error('fixture group id')
   const html = renderGroup(
-    { kind: 'preview', groupId, name: 'Morning run', activeCount: 1, headline: null },
+    { kind: 'preview', groupId, label: 'Morning run', activeCount: 1, headline: null },
     signedOut({ inApp: true, os: 'android' }),
     origin,
   )

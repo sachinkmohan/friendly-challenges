@@ -19,7 +19,7 @@ import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
 import { joinGroup, parseGroupId, type GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
 import { safeReturnPath } from '../src/page.ts'
-import { activeMemberIds, groupRef, readGroup, utcToday, type ChallengeDoc } from '../src/store.ts'
+import { activeMemberIds, groupRef, labelOf, readGroup, utcToday, type ChallengeDoc } from '../src/store.ts'
 import { closeServer, cookieFor, groupWith, listen, person, post, setLeftOn } from './support/fixtures.ts'
 import { readChallengeHeadline, readMemberChallenge } from './support/reads.ts'
 
@@ -426,7 +426,7 @@ test('started terms stay put, a rhythm changes until the start, and a late joine
     assert.deepEqual(await saveRhythm(db, grace, groupId, { interval: 'every_2_days' }), { ok: true, rhythm: 'every_2_days' })
     assert.deepEqual(await saveRhythm(db, grace, groupId, { interval: 'every_day' }), { ok: false, failure: 'frozen' })
 
-    assert.deepEqual(await joinGroup(db, noor, groupId), { ok: true, groupId, name: 'Morning run' })
+    assert.deepEqual(await joinGroup(db, noor, groupId), { ok: true, groupId, label: 'Morning run' })
     assert.deepEqual(await saveRhythm(db, noor, groupId, { interval: 'every_3_days' }), { ok: true, rhythm: 'every_3_days' })
     assert.deepEqual(await saveRhythm(db, noor, groupId, { interval: 'every_day' }), { ok: false, failure: 'frozen' })
     const stored = await readGroup(db, groupId)
@@ -702,22 +702,23 @@ const storedTerms = {
 
 async function storedChallenge(
   db: Database,
-  challenge: Record<string, unknown>,
+  challenge: Record<string, unknown> | null,
   rhythms: Record<string, unknown> = {},
+  group: Record<string, unknown> = { name: 'Stored' },
 ): Promise<string> {
   const groupId = '00000000-0000-4000-8000-000000000042'
   await groupRef(db, groupId).set({
-    name: 'Stored',
     createdBy: 'ada',
     memberIds: ['ada'],
     members: { ada: { joinedOn: '2026-11-01', leftOn: null } },
     challenge,
     rhythms,
+    ...group,
   })
   return groupId
 }
 
-test('a started challenge stored before causes reads as one with no cause, and a draft never carries one', async () => {
+test('a challenge stored before causes reads as one with no cause, and a solo draft keeps its cause', async () => {
   const db = openTestDatabase()
   try {
     const legacy = await storedChallenge(db, { ...storedTerms, phase: 'active' })
@@ -727,13 +728,44 @@ test('a started challenge stored before causes reads as one with no cause, and a
     assert.deepEqual((await readGroup(db, solo))?.challenge, { ...storedTerms, phase: 'active', cause: 'Food bank', joinsFromStart: false })
 
     const draft = await storedChallenge(db, { ...storedTerms, phase: 'draft' })
-    assert.deepEqual((await readGroup(db, draft))?.challenge, { ...storedTerms, phase: 'draft' })
+    assert.deepEqual((await readGroup(db, draft))?.challenge, { ...storedTerms, cause: null, phase: 'draft' })
 
-    const draftWithCause = await storedChallenge(db, { ...storedTerms, phase: 'draft', cause: 'Food bank' })
-    await assert.rejects(readGroup(db, draftWithCause))
+    const soloDraft = await storedChallenge(db, { ...storedTerms, phase: 'draft', cause: 'Food bank' })
+    assert.deepEqual((await readGroup(db, soloDraft))?.challenge, { ...storedTerms, cause: 'Food bank', phase: 'draft' })
 
     const badCause = await storedChallenge(db, { ...storedTerms, phase: 'active', cause: 7 })
     await assert.rejects(readGroup(db, badCause))
+  } finally {
+    await closeDatabase(db)
+  }
+})
+
+test('a group is labelled by its own name if it has one, else by its challenge, and needs one of the two', async () => {
+  const db = openTestDatabase()
+  try {
+    const legacy = await storedChallenge(db, null)
+    const legacyGroup = await readGroup(db, legacy)
+    assert.ok(legacyGroup)
+    assert.equal(legacyGroup.name, 'Stored')
+    assert.equal(legacyGroup.challenge, null)
+    assert.equal(labelOf(legacyGroup), 'Stored')
+
+    const named = await storedChallenge(db, { ...storedTerms, phase: 'draft' })
+    const namedGroup = await readGroup(db, named)
+    assert.ok(namedGroup)
+    assert.equal(labelOf(namedGroup), 'Stored')
+
+    const unnamed = await storedChallenge(db, { ...storedTerms, phase: 'draft' }, {}, { name: null })
+    const unnamedGroup = await readGroup(db, unnamed)
+    assert.ok(unnamedGroup)
+    assert.equal(unnamedGroup.name, null)
+    assert.equal(labelOf(unnamedGroup), 'No sweets')
+
+    const missingName = await storedChallenge(db, { ...storedTerms, phase: 'active' }, {}, {})
+    assert.equal(labelOf((await readGroup(db, missingName))!), 'No sweets')
+
+    const empty = await storedChallenge(db, null, {}, { name: null })
+    await assert.rejects(readGroup(db, empty), /group name/)
   } finally {
     await closeDatabase(db)
   }

@@ -512,6 +512,7 @@ function draftDoc(terms: ChallengeTerms): ChallengeDoc {
     stakeMinor: terms.stakeMinor,
     startsOn: terms.startsOn,
     endsOn: terms.endsOn,
+    cause: null,
     phase: 'draft',
   }
 }

@@ -661,7 +661,7 @@ function homeGroups(groups: readonly HomeGroup[]): string {
   const items = groups
     .map((group) => {
       const href = escapeHtml(groupHref(group.groupId))
-      const name = escapeHtml(group.name)
+      const name = escapeHtml(group.label)
       return `<li><a href="${href}"><span class="group-name">${name}</span><span class="count">${activeCountText(group.activeCount)}</span><span class="chevron" aria-hidden="true">›</span></a></li>`
     })
     .join('')
@@ -1270,7 +1270,7 @@ export function renderGroup(
   attempt?: ChallengeAttempt,
   toast: string | null = null,
 ): string {
-  const title = `<h2>${escapeHtml(view.name)}</h2>`
+  const title = `<h2>${escapeHtml(view.label)}</h2>`
   const count = `<p class="count">${activeCountText(view.activeCount)}</p>`
   const failure = failureParagraph(attempt)
   if (view.kind === 'full') {

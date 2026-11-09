@@ -76,7 +76,7 @@ test('deleting removes the group, its check-ins, and its payments for every memb
     assert.deepEqual(paid, { ok: true, amountMinor: 500, currency: 'USD', minorDigits: 2, payeeName: 'Ada' })
     assert.equal(await childCount(db, groupId), 3)
 
-    assert.deepEqual(await deleteGroup(db, ada, groupId, true), { ok: true, name: 'Morning run' })
+    assert.deepEqual(await deleteGroup(db, ada, groupId, true), { ok: true, label: 'Morning run' })
 
     assert.equal(await readGroup(db, groupId), null)
     assert.equal(await childCount(db, groupId), 0)

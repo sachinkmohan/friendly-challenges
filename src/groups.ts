@@ -1,6 +1,6 @@
 import { stakesGoFrom } from './challenge.ts'
 import type { Database } from './db.ts'
-import { ACTIVE_MEMBER_CAP, activeMemberIds, compare, groupRef, memberOf, parseGroup, readGroup, utcToday, type GroupDoc, type UserDoc } from './store.ts'
+import { ACTIVE_MEMBER_CAP, activeMemberIds, compare, groupRef, labelOf, memberOf, parseGroup, readGroup, utcToday, type GroupDoc, type UserDoc } from './store.ts'
 import type { Account } from './identity.ts'
 
 export type GroupId = string & { readonly brand: 'GroupId' }
@@ -20,7 +20,7 @@ export type CreateGroupResult =
 type JoinFailure = 'group_missing' | 'group_full' | 'solo_started'
 
 export type JoinResult =
-  | { ok: true; groupId: GroupId; name: string }
+  | { ok: true; groupId: GroupId; label: string }
   | { ok: false; failure: JoinFailure }
 
 export type MemberLine = {
@@ -35,18 +35,18 @@ export type GroupView =
   | {
       kind: 'members'
       groupId: GroupId
-      name: string
+      label: string
       activeCount: number
       creatorId: string
       members: readonly MemberLine[]
     }
-  | { kind: 'preview'; groupId: GroupId; name: string; activeCount: number }
-  | { kind: 'full'; groupId: GroupId; name: string; activeCount: number }
-  | { kind: 'solo'; groupId: GroupId; name: string; activeCount: number }
+  | { kind: 'preview'; groupId: GroupId; label: string; activeCount: number }
+  | { kind: 'full'; groupId: GroupId; label: string; activeCount: number }
+  | { kind: 'solo'; groupId: GroupId; label: string; activeCount: number }
 
 export type HomeGroup = {
   groupId: GroupId
-  name: string
+  label: string
   activeCount: number
 }
 
@@ -80,7 +80,7 @@ export const deleteFailureCopy = {
   not_confirmed: 'Tick the box to confirm you want to delete the group for everyone.',
 } as const satisfies Record<DeleteFailure, string>
 
-export type DeleteResult = { ok: true; name: string } | { ok: false; failure: DeleteFailure }
+export type DeleteResult = { ok: true; label: string } | { ok: false; failure: DeleteFailure }
 
 class JoinRejected extends Error {
   readonly failure: JoinFailure
@@ -114,19 +114,19 @@ export async function createGroup(
 
 export async function joinGroup(db: Database, account: Account, groupId: GroupId): Promise<JoinResult> {
   try {
-    const name = await db.runTransaction(async (tx) => {
+    const label = await db.runTransaction(async (tx) => {
       const group = await readGroup(db, groupId, tx)
       if (!group) throw new JoinRejected('group_missing')
-      if (group.members[account.id]) return group.name
+      if (group.members[account.id]) return labelOf(group)
       if (isStartedSolo(group)) throw new JoinRejected('solo_started')
       if (activeMemberIds(group).length >= ACTIVE_MEMBER_CAP) throw new JoinRejected('group_full')
       tx.update(groupRef(db, groupId), {
         memberIds: [...group.memberIds, account.id],
         [`members.${account.id}`]: { joinedOn: utcToday(), leftOn: null },
       })
-      return group.name
+      return labelOf(group)
     })
-    return { ok: true, groupId, name }
+    return { ok: true, groupId, label }
   } catch (error) {
     if (error instanceof JoinRejected) return { ok: false, failure: error.failure }
     throw error
@@ -136,18 +136,18 @@ export async function joinGroup(db: Database, account: Account, groupId: GroupId
 // The group document goes first, inside the creator check, so a check-in or payment racing the delete
 // finds no group and is refused. The sweep then removes the check-ins and payments under it.
 export async function deleteGroup(db: Database, actor: Account, groupId: GroupId, confirmed: boolean): Promise<DeleteResult> {
-  const outcome = await db.runTransaction(async (tx): Promise<{ failure: DeleteFailure } | { name: string }> => {
+  const outcome = await db.runTransaction(async (tx): Promise<{ failure: DeleteFailure } | { label: string }> => {
     const group = await readGroup(db, groupId, tx)
     if (!group) return { failure: 'group_missing' }
     if (memberOf(group, actor.id)?.leftOn !== null) return { failure: 'not_member' }
     if (group.createdBy !== actor.id) return { failure: 'not_creator' }
     if (!confirmed) return { failure: 'not_confirmed' }
     tx.delete(groupRef(db, groupId))
-    return { name: group.name }
+    return { label: labelOf(group) }
   })
   if ('failure' in outcome) return { ok: false, failure: outcome.failure }
   await db.recursiveDelete(groupRef(db, groupId))
-  return { ok: true, name: outcome.name }
+  return { ok: true, label: outcome.label }
 }
 
 /** users must hold every active member when the viewer is one of them. */
@@ -159,6 +159,7 @@ export function groupViewFrom(
 ): Exclude<GroupView, { kind: 'missing' }> {
   const active = activeMemberIds(group)
   const activeCount = active.length
+  const label = labelOf(group)
   if (viewerId !== null && active.includes(viewerId)) {
     const members = active
       .map((userId): MemberLine => {
@@ -170,11 +171,11 @@ export function groupViewFrom(
         (a, b) =>
           compare(a.joinedOn, b.joinedOn) || compare(a.displayName, b.displayName) || compare(a.userId, b.userId),
       )
-    return { kind: 'members', groupId, name: group.name, activeCount, creatorId: group.createdBy, members }
+    return { kind: 'members', groupId, label, activeCount, creatorId: group.createdBy, members }
   }
-  if (isStartedSolo(group)) return { kind: 'solo', groupId, name: group.name, activeCount }
-  if (activeCount >= ACTIVE_MEMBER_CAP) return { kind: 'full', groupId, name: group.name, activeCount }
-  return { kind: 'preview', groupId, name: group.name, activeCount }
+  if (isStartedSolo(group)) return { kind: 'solo', groupId, label, activeCount }
+  if (activeCount >= ACTIVE_MEMBER_CAP) return { kind: 'full', groupId, label, activeCount }
+  return { kind: 'preview', groupId, label, activeCount }
 }
 
 export async function listHomeGroups(db: Database, account: Account): Promise<readonly HomeGroup[]> {
@@ -185,7 +186,7 @@ export async function listHomeGroups(db: Database, account: Account): Promise<re
     if (!groupId) throw new Error('home group')
     const group = parseGroup(doc.data())
     const active = activeMemberIds(group)
-    if (active.includes(account.id)) groups.push({ groupId, name: group.name, activeCount: active.length })
+    if (active.includes(account.id)) groups.push({ groupId, label: labelOf(group), activeCount: active.length })
   }
-  return groups.sort((a, b) => compare(a.name, b.name) || compare(a.groupId, b.groupId))
+  return groups.sort((a, b) => compare(a.label, b.label) || compare(a.groupId, b.groupId))
 }
