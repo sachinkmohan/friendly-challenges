@@ -1,4 +1,4 @@
-# 0014: We will make the app installable as a web app
+# 0015: We will make the app installable as a web app
 
 - **Status:** accepted
 - **Date:** 2026-11-09

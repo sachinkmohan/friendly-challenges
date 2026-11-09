@@ -40,7 +40,7 @@ async function activeCrew(): Promise<Crew> {
     const rhythm = await saveRhythm(db, who, groupId, { interval: 'every_day' })
     if (!rhythm.ok) throw new Error(rhythm.failure)
   }
-  const started = await startChallenge(db, ada, groupId, { cause: '' })
+  const started = await startChallenge(db, ada, groupId)
   if (!started.ok) throw new Error(started.failure)
   return { db, ada, grace, lin, groupId }
 }
@@ -76,7 +76,7 @@ test('deleting removes the group, its check-ins, and its payments for every memb
     assert.deepEqual(paid, { ok: true, amountMinor: 500, currency: 'USD', minorDigits: 2, payeeName: 'Ada' })
     assert.equal(await childCount(db, groupId), 3)
 
-    assert.deepEqual(await deleteGroup(db, ada, groupId, true), { ok: true, name: 'Morning run' })
+    assert.deepEqual(await deleteGroup(db, ada, groupId, true), { ok: true, label: 'No sweets' })
 
     assert.equal(await readGroup(db, groupId), null)
     assert.equal(await childCount(db, groupId), 0)
@@ -97,12 +97,12 @@ test('the creator deletes from the group page and lands on home, and other membe
   const graceCookie = await cookieFor(db, grace)
   const page = async (cookie: string) => fetch(`${base}/groups/${groupId}`, { headers: { cookie } })
   try {
-    assert.match(await (await page(adaCookie)).text(), /Delete group/)
-    assert.doesNotMatch(await (await page(graceCookie)).text(), /Delete group/)
+    assert.match(await (await page(adaCookie)).text(), /Delete challenge/)
+    assert.doesNotMatch(await (await page(graceCookie)).text(), /Delete challenge/)
 
     const byMember = await post(base, `/groups/${groupId}/delete`, graceCookie, 'confirm=yes')
     assert.equal(byMember.status, 403)
-    assert.match(await byMember.text(), /Only the person who made the group can delete it\./)
+    assert.match(await byMember.text(), /Only the person who made the challenge can delete it\./)
 
     const unconfirmed = await post(base, `/groups/${groupId}/delete`, adaCookie, '')
     assert.equal(unconfirmed.status, 400)

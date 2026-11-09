@@ -13,4 +13,4 @@ We will fill the screen when the window is 500px wide or less, or 500px tall or 
 
 ## Consequences
 
-Next agent keeps one shell in [`src/page.ts`](../../src/page.ts) and puts new screens inside it. The phone breakpoint is one `@media` rule in that shell. Screens must lay out at any width from 320px up, because landscape phones now give them the full width. [0014](0014-install-as-a-web-app.md) adds a manifest and a service worker. A native wrapper stays out.
+Next agent keeps one shell in [`src/page.ts`](../../src/page.ts) and puts new screens inside it. The phone breakpoint is one `@media` rule in that shell. Screens must lay out at any width from 320px up, because landscape phones now give them the full width. [0015](0015-install-as-a-web-app.md) adds a manifest and a service worker. A native wrapper stays out.

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { parseGroupId } from '../src/groups.ts'
-import { renderGroup, renderHome, renderMessage, renderNewGroup } from '../src/page.ts'
+import { renderGroup, renderHome, renderMessage, renderNewChallenge } from '../src/page.ts'
 
 const account = {
   id: '1',
@@ -24,10 +24,10 @@ test('every page is the same phone shell, full screen on a phone', () => {
   const pages = [
     renderHome(signedOut),
     renderHome({ state: 'signed_in', account, groups: [], heatmaps: [], browser: signedOut.browser }),
-    renderNewGroup(signedOut),
-    renderNewGroup({ state: 'signed_in', account }),
+    renderNewChallenge(signedOut),
+    renderNewChallenge({ state: 'signed_in', account }),
     renderGroup(
-      { kind: 'preview', groupId, name: 'Morning run', activeCount: 1, headline: null },
+      { kind: 'preview', groupId, label: 'Morning run', activeCount: 1, headline: null },
       signedOut,
       'http://127.0.0.1:3000',
     ),
@@ -73,7 +73,7 @@ test('signed-out shell keeps Google sign-in on the phone screens', () => {
 test('signed-in shell keeps the account card and sign-out', () => {
   const html = renderHome({ state: 'signed_in', account, groups: [], heatmaps: [], browser: signedOut.browser })
   assert.match(html, /Hello, Ada/)
-  assert.match(html, /You are not in a group yet/)
+  assert.match(html, /You are not in a challenge yet/)
   assert.match(html, /href="\/groups\/new"/)
   assert.doesNotMatch(html, /Your group will use this account/)
   assert.match(html, /ada@example.com/)
@@ -88,15 +88,15 @@ test('home keeps your groups apart from creating a new one', () => {
   const html = renderHome({
     state: 'signed_in',
     account,
-    groups: [{ groupId, name: '100 Days of Writing', activeCount: 2 }],
+    groups: [{ groupId, label: '100 Days of Writing', activeCount: 2 }],
     heatmaps: [],
     browser: signedOut.browser,
   })
-  const yours = html.indexOf('Your groups')
+  const yours = html.indexOf('Your challenges')
   const group = html.indexOf('100 Days of Writing')
   const fresh = html.indexOf('Start something new')
   const create = html.indexOf('href="/groups/new"')
-  assert.ok(yours > -1 && yours < group, 'groups sit under a Your groups label')
+  assert.ok(yours > -1 && yours < group, 'groups sit under a Your challenges label')
   assert.ok(group < fresh && fresh < create, 'creating a group sits in its own later section')
   assert.match(html, /<a href="\/groups\/[^"]+"><span class="group-name">100 Days of Writing<\/span><span class="count">2 active<\/span>/)
   assert.match(html, /<div class="new-group">/)

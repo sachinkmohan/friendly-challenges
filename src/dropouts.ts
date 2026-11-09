@@ -3,7 +3,7 @@ import type { Database } from './db.ts'
 import { parseIsoDate, type IsoDate } from './challenge.ts'
 import type { GroupId } from './groups.ts'
 import type { Account } from './identity.ts'
-import { groupRef, memberOf, readGroup, readUsers } from './store.ts'
+import { groupRef, labelOf, memberOf, readGroup, readUsers } from './store.ts'
 
 export type DropoutInput = {
   readonly memberId: string
@@ -20,10 +20,10 @@ export type DropoutFailure =
   | 'future_day'
 
 export const dropoutFailureCopy = {
-  group_missing: 'That group does not exist.',
-  not_member: 'Join the group before you record a dropout.',
-  not_allowed: 'Only that member or the person who made the group can record this.',
-  bad_member: 'Pick someone who is still in the group.',
+  group_missing: 'That challenge does not exist.',
+  not_member: 'Join the challenge before you record a dropout.',
+  not_allowed: 'Only that member or the person who made the challenge can record this.',
+  bad_member: 'Pick someone who is still in the challenge.',
   bad_day: 'Use a real date.',
   before_join: 'Pick a last day on or after the day they joined.',
   future_day: 'Pick a last day that is today or earlier.',
@@ -62,7 +62,7 @@ export async function recordDropout(
       if (lastDay < target.joinedOn) throw new DropoutRejected('before_join')
       if (lastDay > today) throw new DropoutRejected('future_day')
       tx.update(groupRef(db, groupId), new FieldPath('members', input.memberId, 'leftOn'), lastDay)
-      return { groupName: group.name, lastDay }
+      return { groupName: labelOf(group), lastDay }
     })
     const member = (await readUsers(db, [input.memberId])).get(input.memberId)
     if (!member) throw new Error('member user')
