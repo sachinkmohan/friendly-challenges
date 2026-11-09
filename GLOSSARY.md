@@ -5,15 +5,15 @@ Friends hold each other to a daily habit by putting money on it. Each missed day
 ## Language
 
 **Group**:
-One to five people who share one challenge.
-_Avoid_: Team, circle
+The one to five people who share one challenge. It has no name of its own: the challenge's name stands for it.
+_Avoid_: Team, circle, group name
 
 **Challenge**:
 The habit a group commits to, with one currency, one per-day stake, and an end date.
 _Avoid_: Goal, bet
 
 **Solo challenge**:
-A challenge that starts with one member. It stays solo: nobody can join once it has started.
+A challenge its creator marks as solo when creating it. It has one member for good: nobody can join it.
 _Avoid_: Personal challenge, private challenge
 
 **Stake**:
@@ -25,7 +25,7 @@ The outside payee, named on a solo challenge, that its missed stakes are owed to
 _Avoid_: Charity, jar, beneficiary
 
 **Creator**:
-The member who made the group. Only the creator sets the challenge's terms and starts it.
+The member who made the challenge. Only the creator sets the challenge's terms and starts it.
 _Avoid_: Owner, admin, host
 
 **Terms**:

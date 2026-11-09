@@ -27,6 +27,7 @@ export type Toast =
   | { readonly kind: 'left'; readonly group: string; readonly lastDay: IsoDate }
   | { readonly kind: 'dropped'; readonly member: string; readonly lastDay: IsoDate }
   | { readonly kind: 'deleted'; readonly group: string }
+  | { readonly kind: 'name_dropped'; readonly label: string }
 
 export type ToastReceipt = {
   readonly text: string | null
@@ -72,6 +73,8 @@ export function toastText(toast: Toast): string {
       return `Recorded ${toast.member}'s last day as ${shortDate(toast.lastDay)}.`
     case 'deleted':
       return `Deleted ${toast.group}.`
+    case 'name_dropped':
+      return `Now called ${toast.label}.`
   }
 }
 

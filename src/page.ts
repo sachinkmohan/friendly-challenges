@@ -19,6 +19,8 @@ import {
   type ChallengeInput,
   type ChallengeTerms,
   type ChallengeType,
+  type CreateChallengeInput,
+  type CreateChallengeResult,
   type MemberChallengeCard,
   type Rhythm,
   type RhythmInput,
@@ -27,10 +29,11 @@ import {
   type StartKind,
   type StartStep,
 } from './challenge.ts'
+import { CURRENCY_CODES } from './currencies.ts'
 import { DAY_MARK_LABELS, type GroupCalendar, type Heatmap, type MarkedDay } from './calendar.ts'
 import { dropoutFailureCopy, type DropoutFailure, type DropoutInput } from './dropouts.ts'
 import { CHECK_IN_LABELS, checkInFailureCopy, type CheckIn, type CheckInFailure } from './checkins.ts'
-import { deleteFailureCopy, parseGroupId, type DeleteFailure, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
+import { deleteFailureCopy, dropNameFailureCopy, parseGroupId, type DeleteFailure, type DropNameFailure, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
 import type { Browser, Os } from './browser.ts'
 import { authFailureCopy, type Account, type AuthFailure, type Viewer } from './identity.ts'
 
@@ -548,6 +551,7 @@ const checkInSuffix = '/check-in'
 const paymentSuffix = '/payment'
 const dropoutSuffix = '/dropout'
 const deleteSuffix = '/delete'
+const dropNameSuffix = '/drop-name'
 
 export type HomePage =
   | Extract<Viewer, { state: 'signed_out' }>
@@ -565,6 +569,7 @@ export type GroupRoute =
   | { kind: 'record_payment'; groupId: GroupId }
   | { kind: 'record_dropout'; groupId: GroupId }
   | { kind: 'delete_group'; groupId: GroupId }
+  | { kind: 'drop_group_name'; groupId: GroupId }
 
 export function groupHref(groupId: GroupId): string {
   return `${groupsRoot}/${groupId}`
@@ -618,6 +623,7 @@ function routeSuffix(
     | 'record_payment'
     | 'record_dropout'
     | 'delete_group'
+    | 'drop_group_name'
     | 'join',
 ): GroupRoute | null {
   if (!rest.endsWith(suffix) || rest.length <= suffix.length) return null
@@ -641,6 +647,7 @@ export function matchGroupPath(path: string): GroupRoute | null {
     routeSuffix(rest, paymentSuffix, 'record_payment') ??
     routeSuffix(rest, dropoutSuffix, 'record_dropout') ??
     routeSuffix(rest, deleteSuffix, 'delete_group') ??
+    routeSuffix(rest, dropNameSuffix, 'drop_group_name') ??
     routeSuffix(rest, joinSuffix, 'join')
   if (suffixed) return suffixed
   if (rest.includes('/')) return null
@@ -657,15 +664,15 @@ export function safeReturnPath(raw: string | null): string {
 }
 
 function homeGroups(groups: readonly HomeGroup[]): string {
-  if (groups.length === 0) return '<p>You are not in a group yet.</p>'
+  if (groups.length === 0) return '<p>You are not in a challenge yet.</p>'
   const items = groups
     .map((group) => {
       const href = escapeHtml(groupHref(group.groupId))
-      const name = escapeHtml(group.name)
+      const name = escapeHtml(group.label)
       return `<li><a href="${href}"><span class="group-name">${name}</span><span class="count">${activeCountText(group.activeCount)}</span><span class="chevron" aria-hidden="true">›</span></a></li>`
     })
     .join('')
-  return `<p class="section-title">Your groups</p><ul class="groups">${items}</ul>`
+  return `<p class="section-title">Your challenges</p><ul class="groups">${items}</ul>`
 }
 
 const WEEKDAY_LABELS = ['', 'Mon', '', 'Wed', '', 'Fri', ''] as const
@@ -712,7 +719,7 @@ function signedOutScreens(viewer: SignedOut): string {
     <section id="home" class="screen">
       <article class="card">
         <h2>Sign in</h2>
-        <p>Sign in with the Google account you will use for your group.</p>
+        <p>Sign in with the Google account you will use for your challenges.</p>
         ${signInControl(viewer, '/')}
       </article>
     </section>
@@ -737,8 +744,8 @@ function signedInScreens(account: Account, groups: readonly HomeGroup[], heatmap
         ${heatmaps.map(heatmapGrid).join('')}
         <div class="new-group">
           <p class="section-title">Start something new</p>
-          <p class="field-hint">Make a new group and invite up to 4 friends.</p>
-          <a class="button" href="${groupsRoot}/new">Create a group</a>
+          <p class="field-hint">Set the terms, then invite up to 4 friends or go solo.</p>
+          <a class="button" href="${groupsRoot}/new">Create a challenge</a>
         </div>
       </article>
     </section>
@@ -775,30 +782,7 @@ function groupCard(body: string, toast: string | null = null): string {
   return frame(screens, tabBar('/', '/#account'), toast)
 }
 
-export function renderNewGroup(viewer: Viewer, error?: 'name_empty' | 'name_too_long'): string {
-  if (viewer.state === 'signed_out') {
-    return groupCard(`
-      <h2>Create a group</h2>
-      <p>Sign in to create a group.</p>
-      ${signInControl(viewer, `${groupsRoot}/new`)}
-    `)
-  }
-  const message =
-    error === 'name_empty'
-      ? '<p>Type a group name.</p>'
-      : error === 'name_too_long'
-        ? '<p>Use 40 characters or fewer.</p>'
-        : ''
-  return groupCard(`
-    <h2>Create a group</h2>
-    ${message}
-    <form method="post" action="${groupsRoot}">
-      <label for="group-name">Group name</label>
-      <input id="group-name" name="name" autocomplete="off" required>
-      <button type="submit">Create group</button>
-    </form>
-  `)
-}
+type CreateChallengeFailure = Extract<CreateChallengeResult, { ok: false }>['failure']
 
 type TermValues = {
   name: string
@@ -819,9 +803,9 @@ export type ChallengeAttempt = {
   dropoutFailure?: DropoutFailure
   dropoutDraft?: DropoutInput
   deleteFailure?: DeleteFailure
+  dropNameFailure?: DropNameFailure
   draft?: ChallengeInput
   rhythmDraft?: RhythmInput
-  causeDraft?: string
   checkInDay?: string
 }
 
@@ -839,12 +823,13 @@ function typeLabel(type: ChallengeType): string {
   return type.kind === 'custom' ? type.label : PRESET_LABELS[type.preset]
 }
 
-function startStepText(step: StartStep, cap: number, missing: readonly string[]): string {
+function startStepText(step: StartStep, cap: number, missing: readonly string[], start: StartKind | null): string {
   if (step === 'terms_saved') return 'Save the challenge name, type, stake, and dates.'
   if (step === 'rhythms_picked') {
     return missing.length === 0 ? 'Everyone picked a rhythm.' : `Everyone picked a rhythm. Waiting on ${missing.join(', ')}.`
   }
-  return `1 to ${cap} people are active.`
+  if (start === 'solo') return 'Just you, as a solo challenge.'
+  return `2 to ${cap} people are active.`
 }
 
 function failureParagraph(attempt?: ChallengeAttempt): string {
@@ -853,6 +838,7 @@ function failureParagraph(attempt?: ChallengeAttempt): string {
   if (attempt?.paymentFailure) return `<p>${escapeHtml(paymentFailureCopy[attempt.paymentFailure])}</p>`
   if (attempt?.dropoutFailure) return `<p>${escapeHtml(dropoutFailureCopy[attempt.dropoutFailure])}</p>`
   if (attempt?.deleteFailure) return `<p>${escapeHtml(deleteFailureCopy[attempt.deleteFailure])}</p>`
+  if (attempt?.dropNameFailure) return `<p>${escapeHtml(dropNameFailureCopy[attempt.dropNameFailure])}</p>`
   return ''
 }
 
@@ -911,12 +897,12 @@ function termsFromDraft(draft: ChallengeInput): TermValues {
   }
 }
 
-function stakesGoText(stakesGo: StakesGo | null): string {
+function stakesGoText(stakesGo: StakesGo): string {
   if (stakesGo?.kind !== 'cause') return ''
   return `<p>Missed days are owed to ${escapeHtml(stakesGo.name)}.</p>`
 }
 
-function termsText(terms: ChallengeTerms, minorDigits: number, stakesGo: StakesGo | null): string {
+function termsText(terms: ChallengeTerms, minorDigits: number, stakesGo: StakesGo): string {
   const start = escapeHtml(terms.startsOn)
   const end = escapeHtml(terms.endsOn)
   return `<p>${escapeHtml(terms.name)}</p>
@@ -926,10 +912,8 @@ function termsText(terms: ChallengeTerms, minorDigits: number, stakesGo: StakesG
     ${stakesGoText(stakesGo)}`
 }
 
-function termsForm(groupId: GroupId, currencies: readonly string[], values: TermValues): string {
-  const action = escapeHtml(`${groupHref(groupId)}/challenge`)
-  return `<form method="post" action="${action}">
-      <label for="challenge-name">Challenge name</label>
+function termsFields(currencies: readonly string[], values: TermValues): string {
+  return `<label for="challenge-name">Challenge name</label>
       <input id="challenge-name" name="name" value="${escapeHtml(values.name)}" autocomplete="off">
       <label for="challenge-type">Type</label>
       <select id="challenge-type" name="type">${typeOptions(values.type)}</select>
@@ -942,9 +926,55 @@ function termsForm(groupId: GroupId, currencies: readonly string[], values: Term
       <label for="challenge-start">Start date</label>
       <input id="challenge-start" name="starts_on" type="date" value="${escapeHtml(values.startsOn)}">
       <label for="challenge-end">End date</label>
-      <input id="challenge-end" name="ends_on" type="date" value="${escapeHtml(values.endsOn)}">
+      <input id="challenge-end" name="ends_on" type="date" value="${escapeHtml(values.endsOn)}">`
+}
+
+function termsForm(groupId: GroupId, currencies: readonly string[], values: TermValues): string {
+  const action = escapeHtml(`${groupHref(groupId)}/challenge`)
+  return `<form method="post" action="${action}">
+      ${termsFields(currencies, values)}
       <button type="submit">Save challenge</button>
     </form>`
+}
+
+export function renderNewChallenge(viewer: Viewer, failure?: CreateChallengeFailure, draft?: CreateChallengeInput): string {
+  if (viewer.state === 'signed_out') {
+    return groupCard(`
+      <h2>Create a challenge</h2>
+      <p>Sign in to create a challenge.</p>
+      ${signInControl(viewer, `${groupsRoot}/new`)}
+    `)
+  }
+  const message = failure ? `<p class="start-error" role="alert">${escapeHtml(challengeFailureCopy[failure])}</p>` : ''
+  const values = draft ? termsFromDraft(draft) : emptyTerms
+  const solo = draft?.solo ? ' checked' : ''
+  return groupCard(`
+    <h2>Create a challenge</h2>
+    <p>Set the terms and how often you log. Invite friends from the challenge page, or make it solo.</p>
+    ${message}
+    <form method="post" action="${groupsRoot}">
+      ${termsFields(CURRENCY_CODES, values)}
+      <label for="rhythm-interval">How often you log</label>
+      <select id="rhythm-interval" name="interval">${intervalOptions(draft?.interval ?? '')}</select>
+      <label class="confirm"><input type="checkbox" id="challenge-solo" name="solo" value="yes"${solo}> Solo: just me, nobody can join</label>
+      <div id="cause-field">
+        <label for="challenge-cause">Who your missed days are owed to</label>
+        <input id="challenge-cause" name="cause" value="${escapeHtml(draft?.cause ?? '')}" autocomplete="off">
+        <p class="field-hint">Only for a solo challenge. You pay this cause yourself, outside the app.</p>
+      </div>
+      <button type="submit">Create challenge</button>
+    </form>
+    <script>
+      (function () {
+        var solo = document.getElementById('challenge-solo')
+        var cause = document.getElementById('cause-field')
+        if (!solo || !cause) return
+        var sync = function () { cause.hidden = !solo.checked }
+        solo.addEventListener('change', sync)
+        sync()
+      })()
+    </script>
+  `)
 }
 
 function rhythmText(rhythm: Rhythm): string {
@@ -1164,29 +1194,31 @@ function deleteForm(view: Extract<GroupView, { kind: 'members' }>, userId: strin
   if (userId !== view.creatorId) return ''
   const action = escapeHtml(`${groupHref(view.groupId)}${deleteSuffix}`)
   return `<form method="post" action="${action}">
-      <p class="grid-title">Delete this group</p>
+      <p class="grid-title">Delete this challenge</p>
       <p>This removes the challenge, every check-in, and every payment for everyone. It cannot be undone.</p>
       <label class="confirm"><input type="checkbox" name="confirm" value="yes" required> Delete it for everyone</label>
-      <button type="submit" class="danger">Delete group</button>
+      <button type="submit" class="danger">Delete challenge</button>
     </form>`
 }
 
-function startForm(groupId: GroupId, start: StartKind, cause: string | undefined): string {
-  if (start === 'over_cap') return ''
-  const action = escapeHtml(`${groupHref(groupId)}${challengeStartSuffix}#start`)
-  if (start === 'group') return `<form method="post" action="${action}"><button type="submit">Start challenge</button></form>`
+function dropNameForm(view: Extract<GroupView, { kind: 'members' }>, challenge: MemberChallengeCard, userId: string): string {
+  if (userId !== view.creatorId || !view.hasGroupName || challenge.phase === 'unopened') return ''
+  const action = escapeHtml(`${groupHref(view.groupId)}${dropNameSuffix}`)
   return `<form method="post" action="${action}">
-      <p class="field-hint">Invite friends with the link, or start on your own.</p>
-      <label for="start-cause">Who your missed days are owed to</label>
-      <input id="start-cause" name="cause" value="${escapeHtml(cause ?? '')}" autocomplete="off">
-      <button type="submit">Start challenge</button>
+      <p class="field-hint">It still shows the name you first gave it. The challenge is called ${escapeHtml(challenge.terms.name)}.</p>
+      <button type="submit" class="secondary">Use the challenge name instead</button>
     </form>`
 }
 
-function startStepItem(step: StartStep, done: boolean, cap: number, missing: readonly string[]): string {
+function startForm(groupId: GroupId): string {
+  const action = escapeHtml(`${groupHref(groupId)}${challengeStartSuffix}#start`)
+  return `<form method="post" action="${action}"><button type="submit">Start challenge</button></form>`
+}
+
+function startStepItem(step: StartStep, done: boolean, cap: number, missing: readonly string[], start: StartKind | null): string {
   const mark = done ? '✓' : '○'
   const state = done ? 'Done.' : 'Not done yet.'
-  return `<li data-done="${done}"><span class="mark" aria-hidden="true">${mark}</span><span>${escapeHtml(startStepText(step, cap, missing))} <span class="sr-only">${state}</span></span></li>`
+  return `<li data-done="${done}"><span class="mark" aria-hidden="true">${mark}</span><span>${escapeHtml(startStepText(step, cap, missing, start))} <span class="sr-only">${state}</span></span></li>`
 }
 
 function startSection(
@@ -1195,15 +1227,15 @@ function startSection(
   creator: Creator,
   missing: readonly string[],
   failure: ChallengeFailure | undefined,
-  cause: string | undefined,
 ): string {
-  const steps = challenge.checks.map((check) => startStepItem(check.step, check.done, challenge.cap, missing)).join('')
+  const start = challenge.phase === 'draft' ? challenge.start : null
+  const steps = challenge.checks.map((check) => startStepItem(check.step, check.done, challenge.cap, missing, start)).join('')
   const ready = challenge.phase === 'draft' && challenge.checks.every((check) => check.done)
   const alert = failure ? `<p class="start-error" role="alert">${escapeHtml(challengeFailureCopy[failure])}</p>` : ''
   const control = !creator.isViewer
     ? `<p class="field-hint">Waiting for ${escapeHtml(creator.name)} to start.</p>`
     : ready
-      ? startForm(groupId, challenge.start, cause)
+      ? startForm(groupId)
       : '<p class="field-hint">Start challenge appears here once every step above is done.</p>'
   return `<div id="start" role="group" aria-labelledby="start-title">
       <p class="section-title" id="start-title">Before you start</p>
@@ -1231,10 +1263,11 @@ function termsBlock(
       : challenge.phase === 'draft'
         ? termsFromStored(challenge.terms, challenge.minorDigits)
         : emptyTerms
-    return termsForm(groupId, challenge.currencies, values)
+    const solo = challenge.phase === 'draft' ? stakesGoText(challenge.stakesGo) : ''
+    return `${solo}${termsForm(groupId, challenge.currencies, values)}`
   }
   if (challenge.phase === 'unopened') return `<p>Waiting for ${escapeHtml(creator.name)} to set the terms.</p>`
-  const stakesGo = challenge.phase === 'active' ? challenge.stakesGo : null
+  const stakesGo = challenge.stakesGo
   const setBy = creator.isViewer ? '' : `<p class="field-hint">Set by ${escapeHtml(creator.name)}.</p>`
   return `${termsText(challenge.terms, challenge.minorDigits, stakesGo)}${setBy}`
 }
@@ -1249,7 +1282,7 @@ function memberItem(member: MemberLine, rhythms: readonly RhythmLine[]): string 
 function joinControl(groupId: GroupId, viewer: Viewer): string {
   if (viewer.state === 'signed_out') return signInControl(viewer, groupHref(groupId))
   const action = escapeHtml(`${groupHref(groupId)}${joinSuffix}`)
-  return `<form method="post" action="${action}"><button type="submit">Join group</button></form>`
+  return `<form method="post" action="${action}"><button type="submit">Join challenge</button></form>`
 }
 
 function headlineText(headline: ChallengeHeadline | null): string {
@@ -1270,15 +1303,15 @@ export function renderGroup(
   attempt?: ChallengeAttempt,
   toast: string | null = null,
 ): string {
-  const title = `<h2>${escapeHtml(view.name)}</h2>`
+  const title = `<h2>${escapeHtml(view.label)}</h2>`
   const count = `<p class="count">${activeCountText(view.activeCount)}</p>`
   const failure = failureParagraph(attempt)
   if (view.kind === 'full') {
-    return groupCard(`${title}${count}${failure}${headlineText(view.headline)}<p>This group is full.</p>`, toast)
+    return groupCard(`${title}${count}${failure}${headlineText(view.headline)}<p>This challenge is full.</p>`, toast)
   }
   if (view.kind === 'solo') {
     return groupCard(
-      `${title}${count}${failure}${headlineText(view.headline)}<p>This is a solo challenge that has already started, so nobody can join it.</p>`,
+      `${title}${count}${failure}${headlineText(view.headline)}<p>This is a solo challenge, so nobody can join it.</p>`,
       toast,
     )
   }
@@ -1299,7 +1332,6 @@ export function renderGroup(
           creator,
           missingNames(view.members, challenge.missingRhythms),
           attempt?.startFailure,
-          attempt?.causeDraft,
         )
   const rhythm = rhythmControl(view.groupId, challenge, userId, attempt?.rhythmDraft)
   const checkIn = checkInControl(view.groupId, challenge, userId, attempt?.checkInDay)
@@ -1308,6 +1340,7 @@ export function renderGroup(
   return groupCard(`
     ${title}
     ${count}
+    ${dropNameForm(view, challenge, userId)}
     ${failure}
     ${terms}
     ${rhythm}

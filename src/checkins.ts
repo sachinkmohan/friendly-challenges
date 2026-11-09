@@ -44,12 +44,12 @@ export type CheckInFailure =
   | 'not_due'
 
 export const checkInFailureCopy = {
-  group_missing: 'That group does not exist.',
-  not_member: 'Join the group before you log a day.',
+  group_missing: 'That challenge does not exist.',
+  not_member: 'Join the challenge before you log a day.',
   bad_day: 'Use a real date.',
   future_day: 'That day has not come yet.',
   bad_color: 'Pick green or red.',
-  outside_membership: 'You were not in the group on that day.',
+  outside_membership: 'You were not in the challenge on that day.',
   not_due: 'That day is not one of your logging days.',
 } as const satisfies Record<CheckInFailure, string>
 

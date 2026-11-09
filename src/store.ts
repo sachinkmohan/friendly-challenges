@@ -35,22 +35,30 @@ type TermsFields = {
   readonly endsOn: Day
 }
 
-export type ChallengeDoc =
-  | (TermsFields & { readonly phase: 'draft' })
-  | (TermsFields & { readonly phase: 'active'; readonly cause: string | null; readonly joinsFromStart: boolean })
+// A cause marks a solo challenge from Create onward, so solo is never read from the headcount.
+export type ChallengeDoc = TermsFields & { readonly cause: string | null } & (
+    | { readonly phase: 'draft' }
+    | { readonly phase: 'active'; readonly joinsFromStart: boolean }
+  )
 
 export type RhythmDoc = {
   readonly kind: string
 }
 
-export type GroupDoc = {
-  readonly name: string
+type GroupCore = {
   readonly createdBy: string
   readonly memberIds: readonly string[]
   readonly members: { readonly [userId: string]: MemberDoc }
-  readonly challenge: ChallengeDoc | null
   readonly rhythms: { readonly [userId: string]: RhythmDoc }
 }
+
+// Groups made before ADR 0014 carry a name of their own and may have no challenge yet.
+// A group with no name always has a challenge, whose name labels it.
+export type GroupDoc = GroupCore &
+  (
+    | { readonly name: string; readonly challenge: ChallengeDoc | null }
+    | { readonly name: null; readonly challenge: ChallengeDoc }
+  )
 
 export type CheckInDoc = {
   readonly userId: string
@@ -118,7 +126,7 @@ function parseChallenge(raw: unknown): ChallengeDoc {
     endsOn: day(row.endsOn, 'challenge end'),
   }
   const cause = nullable(row.cause, (v) => text(v, 'challenge cause'))
-  if (row.phase === 'draft') return cause === null ? { ...terms, phase: 'draft' } : fail('challenge cause')
+  if (row.phase === 'draft') return { ...terms, cause, phase: 'draft' }
   return { ...terms, phase: 'active', cause, joinsFromStart: row.joinsFromStart === true }
 }
 
@@ -149,14 +157,19 @@ export function parseGroup(raw: unknown): GroupDoc {
   const row = record(raw, 'group')
   if (!Array.isArray(row.memberIds)) throw new Error('group member ids')
   const challenge = nullable(row.challenge, parseChallenge)
-  return {
-    name: text(row.name, 'group name'),
+  const core: GroupCore = {
     createdBy: text(row.createdBy, 'group creator'),
     memberIds: row.memberIds.map((id) => text(id, 'group member id')),
     members: fromStart(parseMap(row.members, parseMember, 'group members'), challenge),
-    challenge,
     rhythms: parseMap(row.rhythms, parseRhythm, 'group rhythms'),
   }
+  const name = nullable(row.name, (v) => text(v, 'group name'))
+  if (name !== null) return { ...core, name, challenge }
+  return challenge !== null ? { ...core, name, challenge } : fail('group name')
+}
+
+export function labelOf(group: GroupDoc): string {
+  return group.name !== null ? group.name : group.challenge.name
 }
 
 export function parseUser(raw: unknown): UserDoc {

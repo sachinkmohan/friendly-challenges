@@ -1,6 +1,6 @@
 # 0009: We will allow solo challenges owed to a cause
 
-- **Status:** accepted
+- **Status:** amended by [0014](0014-name-the-challenge-not-the-group.md)
 - **Date:** 2026-11-08
 
 ## Context

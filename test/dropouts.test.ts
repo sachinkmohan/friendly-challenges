@@ -47,7 +47,7 @@ async function activeCrew(): Promise<Crew> {
     const rhythm = await saveRhythm(db, who, groupId, { interval: 'every_day' })
     if (!rhythm.ok) throw new Error(rhythm.failure)
   }
-  const started = await startChallenge(db, ada, groupId, { cause: '' })
+  const started = await startChallenge(db, ada, groupId)
   if (!started.ok) throw new Error(started.failure)
   return { db, ada, grace, lin, groupId }
 }
@@ -88,13 +88,13 @@ test('the member or the group creator records a dropout and anyone else cannot',
     assert.deepEqual(await drop(ada, grace.id, '2026-11-07'), { ok: false, failure: 'future_day' })
     assert.deepEqual(await leftOn(db, groupId), { [ada.id]: null, [grace.id]: null, [lin.id]: null })
 
-    assert.deepEqual(await drop(lin, lin.id, '2026-11-04'), { ok: true, groupName: 'Morning run', memberName: 'Lin', lastDay: '2026-11-04' })
-    assert.deepEqual(await drop(ada, grace.id, '2026-11-06'), { ok: true, groupName: 'Morning run', memberName: 'Grace', lastDay: '2026-11-06' })
+    assert.deepEqual(await drop(lin, lin.id, '2026-11-04'), { ok: true, groupName: 'No sweets', memberName: 'Lin', lastDay: '2026-11-04' })
+    assert.deepEqual(await drop(ada, grace.id, '2026-11-06'), { ok: true, groupName: 'No sweets', memberName: 'Grace', lastDay: '2026-11-06' })
     assert.deepEqual(await leftOn(db, groupId), { [ada.id]: null, [grace.id]: '2026-11-06', [lin.id]: '2026-11-04' })
 
     assert.deepEqual(await drop(ada, lin.id, '2026-11-05'), { ok: false, failure: 'bad_member' })
     assert.deepEqual(await drop(lin, lin.id, '2026-11-05'), { ok: false, failure: 'not_member' })
-    assert.deepEqual(await drop(ada, ada.id, '2026-11-01'), { ok: true, groupName: 'Morning run', memberName: 'Ada', lastDay: '2026-11-01' })
+    assert.deepEqual(await drop(ada, ada.id, '2026-11-01'), { ok: true, groupName: 'No sweets', memberName: 'Ada', lastDay: '2026-11-01' })
     assert.deepEqual(await recordDropout(db, ada, crypto.randomUUID() as GroupId, { memberId: ada.id, lastDay: '2026-11-01' }, today), {
       ok: false,
       failure: 'group_missing',
@@ -130,7 +130,7 @@ test('debts through the last day stay and later days owe the leaver nothing and 
 
     assert.deepEqual(await recordDropout(db, lin, groupId, { memberId: lin.id, lastDay: '2026-11-03' }, today), {
       ok: true,
-      groupName: 'Morning run',
+      groupName: 'No sweets',
       memberName: 'Lin',
       lastDay: '2026-11-03',
     })
@@ -230,10 +230,10 @@ test('the group card records a dropout and the leaver keeps a calendar row with 
 
     const notAllowed = await post(base, dropoutPath, graceCookie, fields({ member: lin.id, last_day: '2026-11-03' }))
     assert.equal(notAllowed.status, 403)
-    assert.match(await notAllowed.text(), /Only that member or the person who made the group can record this\./)
+    assert.match(await notAllowed.text(), /Only that member or the person who made the challenge can record this\./)
     const outsider = await post(base, dropoutPath, noorCookie, fields({ member: lin.id, last_day: '2026-11-03' }))
     assert.equal(outsider.status, 403)
-    assert.match(await outsider.text(), /Join the group before you record a dropout\./)
+    assert.match(await outsider.text(), /Join the challenge before you record a dropout\./)
 
     const future = await post(base, dropoutPath, adaCookie, fields({ member: grace.id, last_day: '2026-11-07' }))
     assert.equal(future.status, 400)
@@ -262,7 +262,7 @@ test('the group card records a dropout and the leaver keeps a calendar row with 
 
     const lateCheckIn = await post(base, `${groupPath}/check-in`, linCookie, fields({ day: '2026-11-04', color: 'green' }))
     assert.equal(lateCheckIn.status, 400)
-    assert.match(await lateCheckIn.text(), /You were not in the group on that day\./)
+    assert.match(await lateCheckIn.text(), /You were not in the challenge on that day\./)
     assert.deepEqual(await readCheckIns(db, groupId), [])
   } finally {
     await closeServer(server)

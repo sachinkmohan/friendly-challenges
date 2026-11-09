@@ -1,26 +1,20 @@
-import { stakesGoFrom } from './challenge.ts'
 import type { Database } from './db.ts'
-import { ACTIVE_MEMBER_CAP, activeMemberIds, compare, groupRef, memberOf, parseGroup, readGroup, utcToday, type GroupDoc, type UserDoc } from './store.ts'
+import { ACTIVE_MEMBER_CAP, activeMemberIds, compare, groupRef, labelOf, memberOf, parseGroup, readGroup, utcToday, type GroupDoc, type UserDoc } from './store.ts'
 import type { Account } from './identity.ts'
 
 export type GroupId = string & { readonly brand: 'GroupId' }
 
 const GROUP_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-const NAME_MAX = 40
 
 export function parseGroupId(raw: string): GroupId | null {
   if (!GROUP_ID.test(raw)) return null
   return raw as GroupId
 }
 
-export type CreateGroupResult =
-  | { ok: true; groupId: GroupId; name: string }
-  | { ok: false; failure: 'name_empty' | 'name_too_long' }
-
-type JoinFailure = 'group_missing' | 'group_full' | 'solo_started'
+type JoinFailure = 'group_missing' | 'group_full' | 'solo'
 
 export type JoinResult =
-  | { ok: true; groupId: GroupId; name: string }
+  | { ok: true; groupId: GroupId; label: string }
   | { ok: false; failure: JoinFailure }
 
 export type MemberLine = {
@@ -35,52 +29,53 @@ export type GroupView =
   | {
       kind: 'members'
       groupId: GroupId
-      name: string
+      label: string
+      hasGroupName: boolean
       activeCount: number
       creatorId: string
       members: readonly MemberLine[]
     }
-  | { kind: 'preview'; groupId: GroupId; name: string; activeCount: number }
-  | { kind: 'full'; groupId: GroupId; name: string; activeCount: number }
-  | { kind: 'solo'; groupId: GroupId; name: string; activeCount: number }
+  | { kind: 'preview'; groupId: GroupId; label: string; activeCount: number }
+  | { kind: 'full'; groupId: GroupId; label: string; activeCount: number }
+  | { kind: 'solo'; groupId: GroupId; label: string; activeCount: number }
 
 export type HomeGroup = {
   groupId: GroupId
-  name: string
+  label: string
   activeCount: number
 }
 
-function codePointLength(value: string): number {
-  return Array.from(value).length
-}
-
-function nameFailure(name: string): 'name_empty' | 'name_too_long' | null {
-  const length = codePointLength(name)
-  if (length === 0) return 'name_empty'
-  if (length > NAME_MAX) return 'name_too_long'
-  return null
-}
-
-function newGroupId(): GroupId {
+export function newGroupId(): GroupId {
   const id = parseGroupId(crypto.randomUUID())
   if (!id) throw new Error('group id')
   return id
 }
 
-function isStartedSolo(group: GroupDoc): boolean {
-  return stakesGoFrom(group.challenge)?.kind === 'cause'
+function isSolo(group: GroupDoc): boolean {
+  return group.challenge !== null && group.challenge.cause !== null
 }
 
 export type DeleteFailure = 'group_missing' | 'not_member' | 'not_creator' | 'not_confirmed'
 
 export const deleteFailureCopy = {
-  group_missing: 'That group does not exist.',
-  not_member: 'Join the group before you delete it.',
-  not_creator: 'Only the person who made the group can delete it.',
-  not_confirmed: 'Tick the box to confirm you want to delete the group for everyone.',
+  group_missing: 'That challenge does not exist.',
+  not_member: 'Join the challenge before you delete it.',
+  not_creator: 'Only the person who made the challenge can delete it.',
+  not_confirmed: 'Tick the box to confirm you want to delete the challenge for everyone.',
 } as const satisfies Record<DeleteFailure, string>
 
-export type DeleteResult = { ok: true; name: string } | { ok: false; failure: DeleteFailure }
+export type DeleteResult = { ok: true; label: string } | { ok: false; failure: DeleteFailure }
+
+export type DropNameFailure = 'group_missing' | 'not_member' | 'not_creator' | 'no_challenge'
+
+export const dropNameFailureCopy = {
+  group_missing: 'That challenge does not exist.',
+  not_member: 'Join the challenge before you change its name.',
+  not_creator: 'Only the person who made the challenge can change its name.',
+  no_challenge: 'Save the challenge name first, then use it here.',
+} as const satisfies Record<DropNameFailure, string>
+
+export type DropNameResult = { ok: true; label: string } | { ok: false; failure: DropNameFailure }
 
 class JoinRejected extends Error {
   readonly failure: JoinFailure
@@ -91,42 +86,21 @@ class JoinRejected extends Error {
   }
 }
 
-export async function createGroup(
-  db: Database,
-  account: Account,
-  rawName: string,
-): Promise<CreateGroupResult> {
-  const name = rawName.trim()
-  const failure = nameFailure(name)
-  if (failure) return { ok: false, failure }
-  const groupId = newGroupId()
-  const group: GroupDoc = {
-    name,
-    createdBy: account.id,
-    memberIds: [account.id],
-    members: { [account.id]: { joinedOn: utcToday(), leftOn: null } },
-    challenge: null,
-    rhythms: {},
-  }
-  await groupRef(db, groupId).create(group)
-  return { ok: true, groupId, name }
-}
-
 export async function joinGroup(db: Database, account: Account, groupId: GroupId): Promise<JoinResult> {
   try {
-    const name = await db.runTransaction(async (tx) => {
+    const label = await db.runTransaction(async (tx) => {
       const group = await readGroup(db, groupId, tx)
       if (!group) throw new JoinRejected('group_missing')
-      if (group.members[account.id]) return group.name
-      if (isStartedSolo(group)) throw new JoinRejected('solo_started')
+      if (group.members[account.id]) return labelOf(group)
+      if (isSolo(group)) throw new JoinRejected('solo')
       if (activeMemberIds(group).length >= ACTIVE_MEMBER_CAP) throw new JoinRejected('group_full')
       tx.update(groupRef(db, groupId), {
         memberIds: [...group.memberIds, account.id],
         [`members.${account.id}`]: { joinedOn: utcToday(), leftOn: null },
       })
-      return group.name
+      return labelOf(group)
     })
-    return { ok: true, groupId, name }
+    return { ok: true, groupId, label }
   } catch (error) {
     if (error instanceof JoinRejected) return { ok: false, failure: error.failure }
     throw error
@@ -136,18 +110,32 @@ export async function joinGroup(db: Database, account: Account, groupId: GroupId
 // The group document goes first, inside the creator check, so a check-in or payment racing the delete
 // finds no group and is refused. The sweep then removes the check-ins and payments under it.
 export async function deleteGroup(db: Database, actor: Account, groupId: GroupId, confirmed: boolean): Promise<DeleteResult> {
-  const outcome = await db.runTransaction(async (tx): Promise<{ failure: DeleteFailure } | { name: string }> => {
+  const outcome = await db.runTransaction(async (tx): Promise<{ failure: DeleteFailure } | { label: string }> => {
     const group = await readGroup(db, groupId, tx)
     if (!group) return { failure: 'group_missing' }
     if (memberOf(group, actor.id)?.leftOn !== null) return { failure: 'not_member' }
     if (group.createdBy !== actor.id) return { failure: 'not_creator' }
     if (!confirmed) return { failure: 'not_confirmed' }
     tx.delete(groupRef(db, groupId))
-    return { name: group.name }
+    return { label: labelOf(group) }
   })
   if ('failure' in outcome) return { ok: false, failure: outcome.failure }
   await db.recursiveDelete(groupRef(db, groupId))
-  return { ok: true, name: outcome.name }
+  return { ok: true, label: outcome.label }
+}
+
+// Only the label changes, so it is allowed after Start too (ADR 0014). A second press finds no name and writes nothing.
+export async function dropGroupName(db: Database, actor: Account, groupId: GroupId): Promise<DropNameResult> {
+  const outcome = await db.runTransaction(async (tx): Promise<{ failure: DropNameFailure } | { label: string }> => {
+    const group = await readGroup(db, groupId, tx)
+    if (!group) return { failure: 'group_missing' }
+    if (memberOf(group, actor.id)?.leftOn !== null) return { failure: 'not_member' }
+    if (group.createdBy !== actor.id) return { failure: 'not_creator' }
+    if (!group.challenge) return { failure: 'no_challenge' }
+    if (group.name !== null) tx.update(groupRef(db, groupId), { name: null })
+    return { label: group.challenge.name }
+  })
+  return 'failure' in outcome ? { ok: false, failure: outcome.failure } : { ok: true, label: outcome.label }
 }
 
 /** users must hold every active member when the viewer is one of them. */
@@ -159,6 +147,7 @@ export function groupViewFrom(
 ): Exclude<GroupView, { kind: 'missing' }> {
   const active = activeMemberIds(group)
   const activeCount = active.length
+  const label = labelOf(group)
   if (viewerId !== null && active.includes(viewerId)) {
     const members = active
       .map((userId): MemberLine => {
@@ -170,11 +159,11 @@ export function groupViewFrom(
         (a, b) =>
           compare(a.joinedOn, b.joinedOn) || compare(a.displayName, b.displayName) || compare(a.userId, b.userId),
       )
-    return { kind: 'members', groupId, name: group.name, activeCount, creatorId: group.createdBy, members }
+    return { kind: 'members', groupId, label, hasGroupName: group.name !== null, activeCount, creatorId: group.createdBy, members }
   }
-  if (isStartedSolo(group)) return { kind: 'solo', groupId, name: group.name, activeCount }
-  if (activeCount >= ACTIVE_MEMBER_CAP) return { kind: 'full', groupId, name: group.name, activeCount }
-  return { kind: 'preview', groupId, name: group.name, activeCount }
+  if (isSolo(group)) return { kind: 'solo', groupId, label, activeCount }
+  if (activeCount >= ACTIVE_MEMBER_CAP) return { kind: 'full', groupId, label, activeCount }
+  return { kind: 'preview', groupId, label, activeCount }
 }
 
 export async function listHomeGroups(db: Database, account: Account): Promise<readonly HomeGroup[]> {
@@ -185,7 +174,7 @@ export async function listHomeGroups(db: Database, account: Account): Promise<re
     if (!groupId) throw new Error('home group')
     const group = parseGroup(doc.data())
     const active = activeMemberIds(group)
-    if (active.includes(account.id)) groups.push({ groupId, name: group.name, activeCount: active.length })
+    if (active.includes(account.id)) groups.push({ groupId, label: labelOf(group), activeCount: active.length })
   }
-  return groups.sort((a, b) => compare(a.name, b.name) || compare(a.groupId, b.groupId))
+  return groups.sort((a, b) => compare(a.label, b.label) || compare(a.groupId, b.groupId))
 }

@@ -4,19 +4,20 @@ import { upsertAccount } from './accounts.ts'
 import { recordPayment, type PaymentFailure, type PaymentInput } from './balances.ts'
 import { clearCookie, readCookie, writeCookie } from './cookies.ts'
 import {
+  createChallenge,
   saveChallenge,
   saveRhythm,
   startChallenge,
   type ChallengeFailure,
   type ChallengeInput,
+  type CreateChallengeInput,
   type RhythmInput,
-  type StartInput,
 } from './challenge.ts'
 import { listHeatmaps, utcToday } from './calendar.ts'
 import type { IsoDate } from './challenge.ts'
 import { logCheckIn, type CheckInInput } from './checkins.ts'
 import { recordDropout, type DropoutFailure, type DropoutInput } from './dropouts.ts'
-import { createGroup, deleteGroup, joinGroup, listHomeGroups, type GroupId } from './groups.ts'
+import { deleteGroup, dropGroupName, joinGroup, listHomeGroups, type GroupId } from './groups.ts'
 import { loadGroupPage, type GroupPage } from './grouppage.ts'
 import { readBrowser } from './browser.ts'
 import { googleIdentity, type Account, type AuthFailure, type FirebaseWebConfig, type IdToken, type Viewer } from './identity.ts'
@@ -27,7 +28,7 @@ import {
   renderGroup,
   renderHome,
   renderMessage,
-  renderNewGroup,
+  renderNewChallenge,
   safeReturnPath,
   type ChallengeAttempt,
   type GroupRoute,
@@ -188,24 +189,30 @@ async function handleGroup(
   const viewer = await viewerFrom(req, deps)
   if (route.kind === 'new') {
     if (method !== 'GET') return rejectMethod(res, 'GET')
-    sendHtml(res, 200, renderNewGroup(viewer))
+    sendHtml(res, 200, renderNewChallenge(viewer))
     return
   }
   if (route.kind === 'create') {
     if (method !== 'POST') return rejectMethod(res, 'POST')
     if (viewer.state === 'signed_out') {
       req.resume()
-      sendHtml(res, 401, renderNewGroup(viewer))
+      sendHtml(res, 401, renderNewChallenge(viewer))
       return
     }
     const form = await readForm(req)
     if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
-    const created = await createGroup(deps.db, viewer.account, form.get('name') ?? '')
+    const input: CreateChallengeInput = {
+      ...challengeInputFrom(form),
+      interval: form.get('interval') ?? '',
+      solo: form.get('solo') === 'yes',
+      cause: form.get('cause') ?? '',
+    }
+    const created = await createChallenge(deps.db, viewer.account, input)
     if (!created.ok) {
-      sendHtml(res, 400, renderNewGroup(viewer, created.failure))
+      sendHtml(res, 400, renderNewChallenge(viewer, created.failure, input))
       return
     }
-    sendRedirect(res, groupHref(created.groupId), [toastCookie({ kind: 'created', group: created.name })], 303)
+    sendRedirect(res, groupHref(created.groupId), [toastCookie({ kind: 'created', group: created.label })], 303)
     return
   }
   if (route.kind === 'save_challenge' || route.kind === 'start_challenge' || route.kind === 'save_rhythm') {
@@ -228,6 +235,10 @@ async function handleGroup(
     await postDelete(req, res, method, origin, route.groupId, viewer, deps)
     return
   }
+  if (route.kind === 'drop_group_name') {
+    await postDropName(req, res, method, origin, route.groupId, viewer, deps)
+    return
+  }
   if (method !== 'POST') return rejectMethod(res, 'POST')
   if (viewer.state === 'signed_out') {
     const page = await loadGroupPage(deps.db, { kind: 'known', account: null }, route.groupId, today(deps))
@@ -237,7 +248,7 @@ async function handleGroup(
   }
   const joined = await joinGroup(deps.db, viewer.account, route.groupId)
   if (joined.ok) {
-    sendRedirect(res, groupHref(joined.groupId), [toastCookie({ kind: 'joined', group: joined.name })], 303)
+    sendRedirect(res, groupHref(joined.groupId), [toastCookie({ kind: 'joined', group: joined.label })], 303)
     return
   }
   if (joined.failure === 'group_missing') {
@@ -258,7 +269,7 @@ function challengeStatus(failure: ChallengeFailure): number {
     failure === 'frozen' ||
     failure === 'no_challenge' ||
     failure === 'outside_headcount' ||
-    failure === 'cause_for_group' ||
+    failure === 'needs_friend' ||
     failure === 'rhythms_missing'
   ) {
     return 409
@@ -306,7 +317,7 @@ async function finishChallenge(
   account: Account,
   deps: AppDeps,
   result: ChallengeOutcome,
-  drafts: Pick<ChallengeAttempt, 'draft' | 'rhythmDraft' | 'causeDraft'> = {},
+  drafts: Pick<ChallengeAttempt, 'draft' | 'rhythmDraft'> = {},
   slot: 'failure' | 'startFailure' = 'failure',
 ): Promise<void> {
   if (result.ok) {
@@ -321,6 +332,18 @@ async function finishChallenge(
   const failure: ChallengeAttempt = { [slot]: result.failure }
   const attempt: ChallengeAttempt = status === 409 ? failure : { ...failure, ...drafts }
   await sendGroupPage(res, status, { state: 'signed_in', account }, groupId, origin, deps, attempt)
+}
+
+function challengeInputFrom(form: URLSearchParams): ChallengeInput {
+  return {
+    name: form.get('name') ?? '',
+    type: form.get('type') ?? '',
+    customLabel: form.get('custom_label') ?? '',
+    currency: form.get('currency') ?? '',
+    stake: form.get('stake') ?? '',
+    startsOn: form.get('starts_on') ?? '',
+    endsOn: form.get('ends_on') ?? '',
+  }
 }
 
 async function postChallenge(
@@ -341,22 +364,13 @@ async function postChallenge(
   const form = await readForm(req)
   if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
   if (route.kind === 'start_challenge') {
-    const input: StartInput = { cause: form.get('cause') ?? '' }
-    const started = await startChallenge(deps.db, viewer.account, route.groupId, input)
+    const started = await startChallenge(deps.db, viewer.account, route.groupId)
     const result: ChallengeOutcome = started.ok ? { ok: true, toast: { kind: 'started', challenge: started.name } } : started
-    await finishChallenge(res, origin, route.groupId, viewer.account, deps, result, { causeDraft: input.cause }, 'startFailure')
+    await finishChallenge(res, origin, route.groupId, viewer.account, deps, result, {}, 'startFailure')
     return
   }
   if (route.kind === 'save_challenge') {
-    const input: ChallengeInput = {
-      name: form.get('name') ?? '',
-      type: form.get('type') ?? '',
-      customLabel: form.get('custom_label') ?? '',
-      currency: form.get('currency') ?? '',
-      stake: form.get('stake') ?? '',
-      startsOn: form.get('starts_on') ?? '',
-      endsOn: form.get('ends_on') ?? '',
-    }
+    const input = challengeInputFrom(form)
     const saved = await saveChallenge(deps.db, viewer.account, route.groupId, input)
     const result: ChallengeOutcome = saved.ok ? { ok: true, toast: { kind: 'terms_saved', challenge: saved.name } } : saved
     await finishChallenge(res, origin, route.groupId, viewer.account, deps, result, { draft: input })
@@ -522,7 +536,7 @@ async function postDelete(
   if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
   const deleted = await deleteGroup(deps.db, viewer.account, groupId, form.get('confirm') === 'yes')
   if (deleted.ok) {
-    sendRedirect(res, '/', [toastCookie({ kind: 'deleted', group: deleted.name })], 303)
+    sendRedirect(res, '/', [toastCookie({ kind: 'deleted', group: deleted.label })], 303)
     return
   }
   if (deleted.failure === 'group_missing') {
@@ -535,6 +549,34 @@ async function postDelete(
     return
   }
   await sendGroupPage(res, deleted.failure === 'not_creator' ? 403 : 400, viewer, groupId, origin, deps, attempt)
+}
+
+async function postDropName(
+  req: IncomingMessage,
+  res: ServerResponse,
+  method: string,
+  origin: string,
+  groupId: GroupId,
+  viewer: Viewer,
+  deps: AppDeps,
+): Promise<void> {
+  if (method !== 'POST') return rejectMethod(res, 'POST')
+  req.resume()
+  if (viewer.state === 'signed_out') {
+    await sendGroupPage(res, 401, viewer, groupId, origin, deps)
+    return
+  }
+  const dropped = await dropGroupName(deps.db, viewer.account, groupId)
+  if (dropped.ok) {
+    sendRedirect(res, groupHref(groupId), [toastCookie({ kind: 'name_dropped', label: dropped.label })], 303)
+    return
+  }
+  if (dropped.failure === 'group_missing') {
+    notFound(res)
+    return
+  }
+  const status = dropped.failure === 'no_challenge' ? 409 : 403
+  await sendGroupPage(res, status, viewer, groupId, origin, deps, { dropNameFailure: dropped.failure })
 }
 
 function rejectForm(res: ServerResponse, failure: 'too_large' | 'bad_type'): void {

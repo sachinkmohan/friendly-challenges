@@ -3,12 +3,12 @@ import type { AddressInfo } from 'node:net'
 import { FieldPath } from 'firebase-admin/firestore'
 import { upsertAccount } from '../../src/accounts.ts'
 import { createApp, type AppDeps } from '../../src/app.ts'
-import type { IsoDate } from '../../src/challenge.ts'
+import { createChallenge, type ChallengeInput, type IsoDate } from '../../src/challenge.ts'
 import type { Database } from '../../src/db.ts'
-import { createGroup, joinGroup, type GroupId } from '../../src/groups.ts'
+import { joinGroup, newGroupId, type GroupId } from '../../src/groups.ts'
 import type { Account, FirebaseWebConfig, IdToken } from '../../src/identity.ts'
 import { createSession } from '../../src/sessions.ts'
-import { groupRef, readGroup } from '../../src/store.ts'
+import { groupRef, readGroup, utcToday } from '../../src/store.ts'
 
 export async function person(db: Database, name: string): Promise<Account> {
   const saved = await upsertAccount(db, {
@@ -25,14 +25,59 @@ export async function person(db: Database, name: string): Promise<Account> {
 // A day after every check-in the tests log, so none of them is in the future.
 export const CHECK_IN_TODAY = '2026-11-30' as IsoDate
 
-export async function groupWith(db: Database, people: readonly Account[], name = 'Morning run'): Promise<GroupId> {
-  const created = await createGroup(db, people[0] as Account, name)
+export const fixtureTerms: ChallengeInput = {
+  name: 'Morning run',
+  type: 'no_sugar',
+  customLabel: '',
+  currency: 'USD',
+  stake: '5',
+  startsOn: '2026-11-01',
+  endsOn: '2026-11-30',
+}
+
+type GroupOptions = { readonly cause?: string; readonly terms?: Partial<ChallengeInput>; readonly interval?: string }
+
+/** A challenge made the one-step way, so the creator already has a rhythm. A cause makes it solo. */
+export async function groupWith(
+  db: Database,
+  people: readonly Account[],
+  name = 'Morning run',
+  options: GroupOptions = {},
+): Promise<GroupId> {
+  const created = await createChallenge(db, people[0] as Account, {
+    ...fixtureTerms,
+    name,
+    ...options.terms,
+    interval: options.interval ?? 'every_day',
+    solo: options.cause !== undefined,
+    cause: options.cause ?? '',
+  })
   if (!created.ok) throw new Error(created.failure)
-  for (const member of people.slice(1)) {
-    const joined = await joinGroup(db, member, created.groupId)
+  await joinAll(db, people.slice(1), created.groupId)
+  return created.groupId
+}
+
+/** A group made before ADR 0014: it has a name of its own and no challenge yet. */
+export async function legacyGroupWith(db: Database, people: readonly Account[], groupName = 'Morning run'): Promise<GroupId> {
+  const creator = people[0] as Account
+  const groupId = newGroupId()
+  await groupRef(db, groupId).create({
+    name: groupName,
+    createdBy: creator.id,
+    memberIds: [creator.id],
+    members: { [creator.id]: { joinedOn: utcToday(), leftOn: null } },
+    challenge: null,
+    rhythms: {},
+  })
+  await joinAll(db, people.slice(1), groupId)
+  return groupId
+}
+
+async function joinAll(db: Database, people: readonly Account[], groupId: GroupId): Promise<void> {
+  for (const member of people) {
+    const joined = await joinGroup(db, member, groupId)
     if (!joined.ok) throw new Error(joined.failure)
   }
-  return created.groupId
 }
 
 // Joins happen today, so tests move join dates back to put members inside a past challenge.
@@ -98,4 +143,19 @@ export async function post(base: string, path: string, cookie: string | null, bo
     },
     body,
   })
+}
+
+/** The body of the Create a challenge form, filled in for a challenge with friends. */
+export function createForm(overrides: Record<string, string> = {}): string {
+  return new URLSearchParams({
+    name: 'Morning run',
+    type: 'no_sugar',
+    custom_label: '',
+    currency: 'USD',
+    stake: '5',
+    starts_on: '2026-11-01',
+    ends_on: '2026-11-30',
+    interval: 'every_day',
+    ...overrides,
+  }).toString()
 }
