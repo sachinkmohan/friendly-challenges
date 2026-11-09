@@ -5,7 +5,7 @@ import { upsertAccount } from '../src/accounts.ts'
 import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
 import { countDocs, labelOf, readGroup, utcToday } from '../src/store.ts'
 import { createSession } from '../src/sessions.ts'
-import { saveChallenge, saveRhythm, startChallenge } from '../src/challenge.ts'
+import { saveRhythm, startChallenge } from '../src/challenge.ts'
 import { joinGroup } from '../src/groups.ts'
 import { closeServer, cookieFor, createForm, fakeVerifier, googleToken, groupWith, listen, person } from './support/fixtures.ts'
 import { viewGroup } from './support/reads.ts'
@@ -92,6 +92,9 @@ test('the creator is the first member and a second person can join', async () =>
     assert.match(rosterHtml, /<li data-done="true">[^]*?Save the challenge name, type, stake, and dates\. <span class="sr-only">Done\.<\/span>/)
     assert.match(rosterHtml, /<li data-done="true">[^]*?Everyone picked a rhythm\./)
     assert.match(rosterHtml, /<span class="rhythm">Every day<\/span>/)
+    assert.match(rosterHtml, /<li data-done="false">[^]*?2 to 5 people are active\. <span class="sr-only">Not done yet\.<\/span>/)
+    assert.match(rosterHtml, /Start challenge appears here once every step above is done\./)
+    assert.doesNotMatch(rosterHtml, /challenge\/start/)
     assert.match(rosterHtml, new RegExp(`${base}${groupPath}`))
     assert.doesNotMatch(rosterHtml, /left_on/)
 
@@ -327,82 +330,71 @@ test('a signed-out join link comes back to the same group after Google', async (
   }
 })
 
-const soloTerms = {
-  name: 'No sweets',
-  type: 'no_sugar',
-  customLabel: '',
-  currency: 'USD',
-  stake: '5',
-  startsOn: '2026-11-01',
-  endsOn: '2026-11-30',
-}
-
-test('nobody joins a solo challenge once it has started, and a group challenge still takes late joiners', async () => {
+test('nobody joins a solo challenge, before or after its start, and a challenge with friends still takes late joiners', async () => {
   const db = openTestDatabase()
   try {
     const [ada, grace, lin, noor] = await Promise.all(['Ada', 'Grace', 'Lin', 'Noor'].map((name) => person(db, name)))
-    const solo = await groupWith(db, [ada], 'Alone')
-    assert.deepEqual(await saveChallenge(db, ada, solo, soloTerms), { ok: true, name: 'No sweets' })
-    assert.deepEqual(await saveRhythm(db, ada, solo, { interval: 'every_day' }), { ok: true, rhythm: 'every_day' })
-    assert.deepEqual(await startChallenge(db, ada, solo, { cause: 'Food bank' }), { ok: true, name: 'No sweets' })
-    assert.deepEqual(await joinGroup(db, grace, solo), { ok: false, failure: 'solo_started' })
+    const solo = await groupWith(db, [ada], 'Alone', { cause: 'Food bank' })
+    assert.deepEqual(await joinGroup(db, grace, solo), { ok: false, failure: 'solo' })
+    assert.equal((await viewGroup(db, grace, solo)).kind, 'solo')
+    assert.deepEqual(await startChallenge(db, ada, solo), { ok: true, name: 'Alone' })
+    assert.deepEqual(await joinGroup(db, grace, solo), { ok: false, failure: 'solo' })
     assert.deepEqual(Object.keys((await readGroup(db, solo))?.members ?? {}), [ada.id])
-    assert.deepEqual(await joinGroup(db, ada, solo), { ok: true, groupId: solo, label: 'No sweets' })
+    assert.deepEqual(await joinGroup(db, ada, solo), { ok: true, groupId: solo, label: 'Alone' })
     assert.equal((await viewGroup(db, grace, solo)).kind, 'solo')
     assert.equal((await viewGroup(db, null, solo)).kind, 'solo')
     assert.equal((await viewGroup(db, ada, solo)).kind, 'members')
 
     const draft = await groupWith(db, [ada], 'Not yet')
-    assert.deepEqual(await saveChallenge(db, ada, draft, soloTerms), { ok: true, name: 'No sweets' })
-    assert.deepEqual(await joinGroup(db, grace, draft), { ok: true, groupId: draft, label: 'No sweets' })
+    assert.deepEqual(await joinGroup(db, grace, draft), { ok: true, groupId: draft, label: 'Not yet' })
 
     const group = await groupWith(db, [ada, grace, lin], 'Group')
-    assert.deepEqual(await saveChallenge(db, ada, group, soloTerms), { ok: true, name: 'No sweets' })
-    for (const who of [ada, grace, lin]) assert.deepEqual(await saveRhythm(db, who, group, { interval: 'every_day' }), { ok: true, rhythm: 'every_day' })
-    assert.deepEqual(await startChallenge(db, ada, group, { cause: '' }), { ok: true, name: 'No sweets' })
-    assert.deepEqual(await joinGroup(db, noor, group), { ok: true, groupId: group, label: 'No sweets' })
+    for (const who of [grace, lin]) assert.deepEqual(await saveRhythm(db, who, group, { interval: 'every_day' }), { ok: true, rhythm: 'every_day' })
+    assert.deepEqual(await startChallenge(db, ada, group), { ok: true, name: 'Group' })
+    assert.deepEqual(await joinGroup(db, noor, group), { ok: true, groupId: group, label: 'Group' })
   } finally {
     await closeDatabase(db)
   }
 })
 
-test('the join page of a started solo challenge says nobody can join it', async () => {
+test('the join page of a solo challenge says nobody can join it, before and after the start', async () => {
   const db = openTestDatabase()
   const [ada, grace] = await Promise.all(['Ada', 'Grace'].map((name) => person(db, name)))
   const graceCookie = await cookieFor(db, grace)
   const { server, base } = await listen(db)
   try {
-    const groupId = await groupWith(db, [ada], 'Alone')
-    assert.deepEqual(await saveChallenge(db, ada, groupId, soloTerms), { ok: true, name: 'No sweets' })
-    assert.deepEqual(await saveRhythm(db, ada, groupId, { interval: 'every_day' }), { ok: true, rhythm: 'every_day' })
-    assert.deepEqual(await startChallenge(db, ada, groupId, { cause: 'Food bank' }), { ok: true, name: 'No sweets' })
+    const groupId = await groupWith(db, [ada], 'Alone', { cause: 'Food bank' })
     const groupPath = `/groups/${groupId}`
-    const copy = /This is a solo challenge that has already started, so nobody can join it\./
+    const copy = /This is a solo challenge, so nobody can join it\./
+    const refused = async () => {
+      const looked = await fetch(`${base}${groupPath}`, { headers: { cookie: graceCookie } })
+      assert.equal(looked.status, 200)
+      const lookedHtml = await looked.text()
+      assert.match(lookedHtml, copy)
+      assert.match(lookedHtml, /Missed days are owed to Food bank\./)
+      assert.doesNotMatch(lookedHtml, /<form/)
+      assert.doesNotMatch(lookedHtml, /Ada/)
 
-    const looked = await fetch(`${base}${groupPath}`, { headers: { cookie: graceCookie } })
-    assert.equal(looked.status, 200)
-    const lookedHtml = await looked.text()
-    assert.match(lookedHtml, copy)
-    assert.match(lookedHtml, /Missed days are owed to Food bank\./)
-    assert.doesNotMatch(lookedHtml, /<form/)
-    assert.doesNotMatch(lookedHtml, /Ada/)
+      const joined = await postForm(base, `${groupPath}/join`, graceCookie)
+      assert.equal(joined.status, 409)
+      const joinedHtml = await joined.text()
+      assert.match(joinedHtml, copy)
+      assert.doesNotMatch(joinedHtml, /<form/)
 
-    const joined = await postForm(base, `${groupPath}/join`, graceCookie)
-    assert.equal(joined.status, 409)
-    const joinedHtml = await joined.text()
-    assert.match(joinedHtml, copy)
-    assert.doesNotMatch(joinedHtml, /<form/)
+      const anon = await postForm(base, `${groupPath}/join`, null)
+      assert.equal(anon.status, 409)
+      const anonHtml = await anon.text()
+      assert.match(anonHtml, copy)
+      assert.doesNotMatch(anonHtml, /<form/)
 
-    const anon = await postForm(base, `${groupPath}/join`, null)
-    assert.equal(anon.status, 409)
-    const anonHtml = await anon.text()
-    assert.match(anonHtml, copy)
-    assert.doesNotMatch(anonHtml, /<form/)
-
-    const anonLooked = await fetch(`${base}${groupPath}`)
-    assert.equal(anonLooked.status, 200)
-    assert.match(await anonLooked.text(), copy)
-    assert.deepEqual(Object.keys((await readGroup(db, groupId))?.members ?? {}), [ada.id])
+      const anonLooked = await fetch(`${base}${groupPath}`)
+      assert.equal(anonLooked.status, 200)
+      assert.match(await anonLooked.text(), copy)
+      assert.deepEqual(Object.keys((await readGroup(db, groupId))?.members ?? {}), [ada.id])
+    }
+    await refused()
+    assert.deepEqual(await startChallenge(db, ada, groupId), { ok: true, name: 'Alone' })
+    await refused()
   } finally {
     await closeServer(server)
     await closeDatabase(db)

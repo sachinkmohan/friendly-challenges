@@ -12,7 +12,6 @@ import {
   type ChallengeInput,
   type CreateChallengeInput,
   type RhythmInput,
-  type StartInput,
 } from './challenge.ts'
 import { listHeatmaps, utcToday } from './calendar.ts'
 import type { IsoDate } from './challenge.ts'
@@ -266,7 +265,7 @@ function challengeStatus(failure: ChallengeFailure): number {
     failure === 'frozen' ||
     failure === 'no_challenge' ||
     failure === 'outside_headcount' ||
-    failure === 'cause_for_group' ||
+    failure === 'needs_friend' ||
     failure === 'rhythms_missing'
   ) {
     return 409
@@ -314,7 +313,7 @@ async function finishChallenge(
   account: Account,
   deps: AppDeps,
   result: ChallengeOutcome,
-  drafts: Pick<ChallengeAttempt, 'draft' | 'rhythmDraft' | 'causeDraft'> = {},
+  drafts: Pick<ChallengeAttempt, 'draft' | 'rhythmDraft'> = {},
   slot: 'failure' | 'startFailure' = 'failure',
 ): Promise<void> {
   if (result.ok) {
@@ -361,10 +360,9 @@ async function postChallenge(
   const form = await readForm(req)
   if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
   if (route.kind === 'start_challenge') {
-    const input: StartInput = { cause: form.get('cause') ?? '' }
-    const started = await startChallenge(deps.db, viewer.account, route.groupId, input)
+    const started = await startChallenge(deps.db, viewer.account, route.groupId)
     const result: ChallengeOutcome = started.ok ? { ok: true, toast: { kind: 'started', challenge: started.name } } : started
-    await finishChallenge(res, origin, route.groupId, viewer.account, deps, result, { causeDraft: input.cause }, 'startFailure')
+    await finishChallenge(res, origin, route.groupId, viewer.account, deps, result, {}, 'startFailure')
     return
   }
   if (route.kind === 'save_challenge') {

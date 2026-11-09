@@ -11,7 +11,7 @@ export function parseGroupId(raw: string): GroupId | null {
   return raw as GroupId
 }
 
-type JoinFailure = 'group_missing' | 'group_full' | 'solo_started'
+type JoinFailure = 'group_missing' | 'group_full' | 'solo'
 
 export type JoinResult =
   | { ok: true; groupId: GroupId; label: string }
@@ -50,8 +50,8 @@ export function newGroupId(): GroupId {
   return id
 }
 
-function isStartedSolo(group: GroupDoc): boolean {
-  return group.challenge?.phase === 'active' && group.challenge.cause !== null
+function isSolo(group: GroupDoc): boolean {
+  return group.challenge !== null && group.challenge.cause !== null
 }
 
 export type DeleteFailure = 'group_missing' | 'not_member' | 'not_creator' | 'not_confirmed'
@@ -80,7 +80,7 @@ export async function joinGroup(db: Database, account: Account, groupId: GroupId
       const group = await readGroup(db, groupId, tx)
       if (!group) throw new JoinRejected('group_missing')
       if (group.members[account.id]) return labelOf(group)
-      if (isStartedSolo(group)) throw new JoinRejected('solo_started')
+      if (isSolo(group)) throw new JoinRejected('solo')
       if (activeMemberIds(group).length >= ACTIVE_MEMBER_CAP) throw new JoinRejected('group_full')
       tx.update(groupRef(db, groupId), {
         memberIds: [...group.memberIds, account.id],
@@ -135,7 +135,7 @@ export function groupViewFrom(
       )
     return { kind: 'members', groupId, label, activeCount, creatorId: group.createdBy, members }
   }
-  if (isStartedSolo(group)) return { kind: 'solo', groupId, label, activeCount }
+  if (isSolo(group)) return { kind: 'solo', groupId, label, activeCount }
   if (activeCount >= ACTIVE_MEMBER_CAP) return { kind: 'full', groupId, label, activeCount }
   return { kind: 'preview', groupId, label, activeCount }
 }

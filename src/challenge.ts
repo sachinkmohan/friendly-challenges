@@ -53,10 +53,6 @@ export type CauseName = string & { readonly brand: 'CauseName' }
 
 export type StakesGo = { readonly kind: 'members' } | { readonly kind: 'cause'; readonly name: CauseName }
 
-export type StartInput = {
-  readonly cause: string
-}
-
 export type ChallengeType =
   | { readonly kind: 'preset'; readonly preset: PresetKind }
   | { readonly kind: 'custom'; readonly label: string }
@@ -113,10 +109,10 @@ export type MembershipSpan = {
 export type ChallengeHeadline = {
   readonly terms: ChallengeTerms
   readonly minorDigits: number
-  readonly stakesGo: StakesGo | null
+  readonly stakesGo: StakesGo
 }
 
-export type StartKind = 'solo' | 'group' | 'over_cap'
+export type StartKind = 'solo' | 'group' | 'too_few' | 'over_cap'
 
 export type StartStep = 'terms_saved' | 'rhythms_picked' | 'headcount'
 
@@ -125,8 +121,7 @@ export type StartCheck = { readonly step: StartStep; readonly done: boolean }
 const startStepFailure = {
   terms_saved: 'no_challenge',
   rhythms_picked: 'rhythms_missing',
-  headcount: 'outside_headcount',
-} as const satisfies Record<StartStep, ChallengeFailure>
+} as const satisfies Record<Exclude<StartStep, 'headcount'>, ChallengeFailure>
 
 export type MemberChallengeCard =
   | {
@@ -140,6 +135,7 @@ export type MemberChallengeCard =
       readonly phase: 'draft'
       readonly terms: ChallengeTerms
       readonly minorDigits: number
+      readonly stakesGo: StakesGo
       readonly cap: number
       readonly start: StartKind
       readonly checks: readonly StartCheck[]
@@ -175,9 +171,9 @@ export type ChallengeFailure =
   | 'frozen'
   | 'no_challenge'
   | 'outside_headcount'
+  | 'needs_friend'
   | 'cause_empty'
   | 'cause_too_long'
-  | 'cause_for_group'
   | 'rhythms_missing'
   | 'bad_interval'
 
@@ -200,7 +196,7 @@ export const challengeFailureCopy = {
   outside_headcount: 'The number of active people is outside the range on this card.',
   cause_empty: 'Type who your missed days are owed to.',
   cause_too_long: 'Use 40 characters or fewer.',
-  cause_for_group: 'Someone else joined, so this is a group challenge now and needs no cause. Press Start again.',
+  needs_friend: 'Invite at least one friend before you start.',
   rhythms_missing: 'Everyone needs to pick a rhythm before the challenge starts.',
   bad_interval: 'Pick how often you log.',
 } as const satisfies Record<ChallengeFailure, string>
@@ -226,9 +222,7 @@ export type StartChallengeResult =
         | 'not_creator'
         | 'no_challenge'
         | 'outside_headcount'
-        | 'cause_empty'
-        | 'cause_too_long'
-        | 'cause_for_group'
+        | 'needs_friend'
         | 'rhythms_missing'
     }
 
@@ -260,9 +254,12 @@ type ParsedChallenge = {
   readonly endsOn: IsoDate
 }
 
-type StoredChallenge =
-  | { readonly phase: 'draft'; readonly terms: ChallengeTerms; readonly minorDigits: number }
-  | { readonly phase: 'active'; readonly terms: ChallengeTerms; readonly minorDigits: number; readonly stakesGo: StakesGo }
+type StoredChallenge = {
+  readonly phase: 'draft' | 'active'
+  readonly terms: ChallengeTerms
+  readonly minorDigits: number
+  readonly stakesGo: StakesGo
+}
 
 class CommandError extends Error {
   readonly failure: ChallengeFailure
@@ -470,8 +467,7 @@ function typeFrom(kind: string, label: string | null): ChallengeType {
   throw new Error('type')
 }
 
-export function stakesGoFrom(doc: ChallengeDoc | null): StakesGo | null {
-  if (doc?.phase !== 'active') return null
+export function stakesGoFrom(doc: ChallengeDoc): StakesGo {
   if (doc.cause === null) return { kind: 'members' }
   const cause = parseCause(doc.cause)
   if (!cause.ok) throw new Error('cause')
@@ -489,13 +485,13 @@ function storedFrom(doc: ChallengeDoc): StoredChallenge {
     startsOn: dateFrom(doc.startsOn),
     endsOn: dateFrom(doc.endsOn),
   }
-  const stakesGo = stakesGoFrom(doc)
-  if (!stakesGo) return { phase: 'draft', minorDigits, terms }
-  return { phase: 'active', minorDigits, terms, stakesGo }
+  return { phase: doc.phase, minorDigits, terms, stakesGo: stakesGoFrom(doc) }
 }
 
-function startKind(activeCount: number): StartKind {
-  if (activeCount === 1) return 'solo'
+function startKind(group: GroupDoc): StartKind {
+  if (group.challenge?.cause != null) return 'solo'
+  const activeCount = activeMemberIds(group).length
+  if (activeCount < 2) return 'too_few'
   if (activeCount <= ACTIVE_MEMBER_CAP) return 'group'
   return 'over_cap'
 }
@@ -506,12 +502,17 @@ function rhythmsMissing(group: GroupDoc): readonly string[] {
 
 // Listed in the order startChallenge reports them, so the first unmet step is the failure a press of Start gets.
 function startChecks(group: GroupDoc): readonly StartCheck[] {
-  const active = activeMemberIds(group)
+  const start = startKind(group)
   return [
     { step: 'terms_saved', done: group.challenge !== null },
     { step: 'rhythms_picked', done: rhythmsMissing(group).length === 0 },
-    { step: 'headcount', done: startKind(active.length) !== 'over_cap' },
+    { step: 'headcount', done: start === 'solo' || start === 'group' },
   ]
+}
+
+function startFailure(group: GroupDoc, step: StartStep): ChallengeFailure {
+  if (step !== 'headcount') return startStepFailure[step]
+  return startKind(group) === 'too_few' ? 'needs_friend' : 'outside_headcount'
 }
 
 function draftDoc(terms: ChallengeTerms, cause: string | null): ChallengeDoc {
@@ -648,25 +649,14 @@ export async function saveChallenge(
   return changed.ok ? { ok: true, name: terms.name } : changed
 }
 
-export async function startChallenge(
-  db: Database,
-  account: Account,
-  groupId: GroupId,
-  input: StartInput,
-): Promise<StartChallengeResult> {
+// The cause, if any, was fixed at Create, so Start only flips the phase.
+export async function startChallenge(db: Database, account: Account, groupId: GroupId): Promise<StartChallengeResult> {
   const changed = await changeGroup<StartChallengeResult>(db, account, groupId, (group) => {
     requireCreator(group, account)
     if (group.challenge?.phase === 'active') return null
     const unmet = startChecks(group).find((check) => !check.done)
-    if (unmet) throw new CommandError(startStepFailure[unmet.step])
-    const fromStart = joinedFromStart(group)
-    if (startKind(activeMemberIds(group).length) === 'group') {
-      if (input.cause.trim() !== '') throw new CommandError('cause_for_group')
-      return { ...fromStart, 'challenge.phase': 'active', 'challenge.cause': null, 'challenge.joinsFromStart': true }
-    }
-    const cause = parseCause(input.cause)
-    if (!cause.ok) throw new CommandError(cause.failure)
-    return { ...fromStart, 'challenge.phase': 'active', 'challenge.cause': cause.name, 'challenge.joinsFromStart': true }
+    if (unmet) throw new CommandError(startFailure(group, unmet.step))
+    return { ...joinedFromStart(group), 'challenge.phase': 'active', 'challenge.joinsFromStart': true }
   })
   if (!changed.ok) return changed
   if (!changed.group.challenge) throw new Error('challenge')
@@ -708,7 +698,7 @@ export async function saveRhythm(
 export function challengeHeadlineFrom(group: GroupDoc): ChallengeHeadline | null {
   if (!group.challenge) return null
   const stored = storedFrom(group.challenge)
-  return { terms: stored.terms, minorDigits: stored.minorDigits, stakesGo: stored.phase === 'active' ? stored.stakesGo : null }
+  return { terms: stored.terms, minorDigits: stored.minorDigits, stakesGo: stored.stakesGo }
 }
 
 /** The viewer must be an active member of the group. */
@@ -721,8 +711,8 @@ export function memberChallengeFrom(group: GroupDoc): MemberChallengeCard {
   const stored = storedFrom(group.challenge)
   const rhythms = rhythmLines(group)
   if (stored.phase === 'draft') {
-    const start = startKind(activeMemberIds(group).length)
-    return { phase: 'draft', terms: stored.terms, minorDigits: stored.minorDigits, cap, start, checks, missingRhythms, currencies, rhythms }
+    const { terms, minorDigits, stakesGo } = stored
+    return { phase: 'draft', terms, minorDigits, stakesGo, cap, start: startKind(group), checks, missingRhythms, currencies, rhythms }
   }
   return { phase: 'active', terms: stored.terms, minorDigits: stored.minorDigits, stakesGo: stored.stakesGo, rhythms }
 }

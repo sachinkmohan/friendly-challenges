@@ -29,7 +29,7 @@ async function activeCrew(): Promise<Crew> {
     const rhythm = await saveRhythm(db, who, groupId, { interval: 'every_day' })
     if (!rhythm.ok) throw new Error(rhythm.failure)
   }
-  const started = await startChallenge(db, ada, groupId, { cause: '' })
+  const started = await startChallenge(db, ada, groupId)
   if (!started.ok) throw new Error(started.failure)
   return { db, ada, grace, lin, groupId }
 }
@@ -246,7 +246,7 @@ test('creating, joining, saving terms, picking a rhythm and starting each confir
       assert.equal(toastShown(await (await land(base, daily, cookie)).text()), 'You now log every day.')
     }
 
-    const started = await post(base, `${groupPath}/challenge/start`, adaCookie, fields({ cause: '' }))
+    const started = await post(base, `${groupPath}/challenge/start`, adaCookie, '')
     assert.equal(started.status, 303)
     assert.equal(toastShown(await (await land(base, started, adaCookie)).text()), 'Started Swim laps.')
   } finally {

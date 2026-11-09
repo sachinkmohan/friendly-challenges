@@ -123,7 +123,7 @@ async function crew(options: { start?: boolean } = {}): Promise<Crew> {
     if (!rhythm.ok) throw new Error(rhythm.failure)
   }
   if (options.start !== false) {
-    const started = await startChallenge(db, ada, groupId, { cause: '' })
+    const started = await startChallenge(db, ada, groupId)
     if (!started.ok) throw new Error(started.failure)
   }
   return { db, ada, grace, lin, groupId }
@@ -362,21 +362,9 @@ test('a solo member owes the cause only for their own red days', () => {
 async function soloCrew(): Promise<{ db: Database; ada: Account; groupId: GroupId }> {
   const db = openTestDatabase()
   const ada = await person(db, 'Ada')
-  const groupId = await groupWith(db, [ada], 'Alone')
+  const groupId = await groupWith(db, [ada], 'No sweets', { cause: 'Food bank' })
   await setJoinedOn(db, groupId, '2026-11-01')
-  const saved = await saveChallenge(db, ada, groupId, {
-    name: 'No sweets',
-    type: 'no_sugar',
-    customLabel: '',
-    currency: 'USD',
-    stake: '5',
-    startsOn: '2026-11-01',
-    endsOn: '2026-11-30',
-  })
-  if (!saved.ok) throw new Error(saved.failure)
-  const rhythm = await saveRhythm(db, ada, groupId, { interval: 'every_day' })
-  if (!rhythm.ok) throw new Error(rhythm.failure)
-  const started = await startChallenge(db, ada, groupId, { cause: 'Food bank' })
+  const started = await startChallenge(db, ada, groupId)
   if (!started.ok) throw new Error(started.failure)
   return { db, ada, groupId }
 }

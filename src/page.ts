@@ -801,7 +801,6 @@ export type ChallengeAttempt = {
   deleteFailure?: DeleteFailure
   draft?: ChallengeInput
   rhythmDraft?: RhythmInput
-  causeDraft?: string
   checkInDay?: string
 }
 
@@ -819,12 +818,13 @@ function typeLabel(type: ChallengeType): string {
   return type.kind === 'custom' ? type.label : PRESET_LABELS[type.preset]
 }
 
-function startStepText(step: StartStep, cap: number, missing: readonly string[]): string {
+function startStepText(step: StartStep, cap: number, missing: readonly string[], start: StartKind | null): string {
   if (step === 'terms_saved') return 'Save the challenge name, type, stake, and dates.'
   if (step === 'rhythms_picked') {
     return missing.length === 0 ? 'Everyone picked a rhythm.' : `Everyone picked a rhythm. Waiting on ${missing.join(', ')}.`
   }
-  return `1 to ${cap} people are active.`
+  if (start === 'solo') return 'Just you, as a solo challenge.'
+  return `2 to ${cap} people are active.`
 }
 
 function failureParagraph(attempt?: ChallengeAttempt): string {
@@ -891,12 +891,12 @@ function termsFromDraft(draft: ChallengeInput): TermValues {
   }
 }
 
-function stakesGoText(stakesGo: StakesGo | null): string {
+function stakesGoText(stakesGo: StakesGo): string {
   if (stakesGo?.kind !== 'cause') return ''
   return `<p>Missed days are owed to ${escapeHtml(stakesGo.name)}.</p>`
 }
 
-function termsText(terms: ChallengeTerms, minorDigits: number, stakesGo: StakesGo | null): string {
+function termsText(terms: ChallengeTerms, minorDigits: number, stakesGo: StakesGo): string {
   const start = escapeHtml(terms.startsOn)
   const end = escapeHtml(terms.endsOn)
   return `<p>${escapeHtml(terms.name)}</p>
@@ -1195,22 +1195,15 @@ function deleteForm(view: Extract<GroupView, { kind: 'members' }>, userId: strin
     </form>`
 }
 
-function startForm(groupId: GroupId, start: StartKind, cause: string | undefined): string {
-  if (start === 'over_cap') return ''
+function startForm(groupId: GroupId): string {
   const action = escapeHtml(`${groupHref(groupId)}${challengeStartSuffix}#start`)
-  if (start === 'group') return `<form method="post" action="${action}"><button type="submit">Start challenge</button></form>`
-  return `<form method="post" action="${action}">
-      <p class="field-hint">Invite friends with the link, or start on your own.</p>
-      <label for="start-cause">Who your missed days are owed to</label>
-      <input id="start-cause" name="cause" value="${escapeHtml(cause ?? '')}" autocomplete="off">
-      <button type="submit">Start challenge</button>
-    </form>`
+  return `<form method="post" action="${action}"><button type="submit">Start challenge</button></form>`
 }
 
-function startStepItem(step: StartStep, done: boolean, cap: number, missing: readonly string[]): string {
+function startStepItem(step: StartStep, done: boolean, cap: number, missing: readonly string[], start: StartKind | null): string {
   const mark = done ? '✓' : '○'
   const state = done ? 'Done.' : 'Not done yet.'
-  return `<li data-done="${done}"><span class="mark" aria-hidden="true">${mark}</span><span>${escapeHtml(startStepText(step, cap, missing))} <span class="sr-only">${state}</span></span></li>`
+  return `<li data-done="${done}"><span class="mark" aria-hidden="true">${mark}</span><span>${escapeHtml(startStepText(step, cap, missing, start))} <span class="sr-only">${state}</span></span></li>`
 }
 
 function startSection(
@@ -1219,15 +1212,15 @@ function startSection(
   creator: Creator,
   missing: readonly string[],
   failure: ChallengeFailure | undefined,
-  cause: string | undefined,
 ): string {
-  const steps = challenge.checks.map((check) => startStepItem(check.step, check.done, challenge.cap, missing)).join('')
+  const start = challenge.phase === 'draft' ? challenge.start : null
+  const steps = challenge.checks.map((check) => startStepItem(check.step, check.done, challenge.cap, missing, start)).join('')
   const ready = challenge.phase === 'draft' && challenge.checks.every((check) => check.done)
   const alert = failure ? `<p class="start-error" role="alert">${escapeHtml(challengeFailureCopy[failure])}</p>` : ''
   const control = !creator.isViewer
     ? `<p class="field-hint">Waiting for ${escapeHtml(creator.name)} to start.</p>`
     : ready
-      ? startForm(groupId, challenge.start, cause)
+      ? startForm(groupId)
       : '<p class="field-hint">Start challenge appears here once every step above is done.</p>'
   return `<div id="start" role="group" aria-labelledby="start-title">
       <p class="section-title" id="start-title">Before you start</p>
@@ -1255,10 +1248,11 @@ function termsBlock(
       : challenge.phase === 'draft'
         ? termsFromStored(challenge.terms, challenge.minorDigits)
         : emptyTerms
-    return termsForm(groupId, challenge.currencies, values)
+    const solo = challenge.phase === 'draft' ? stakesGoText(challenge.stakesGo) : ''
+    return `${solo}${termsForm(groupId, challenge.currencies, values)}`
   }
   if (challenge.phase === 'unopened') return `<p>Waiting for ${escapeHtml(creator.name)} to set the terms.</p>`
-  const stakesGo = challenge.phase === 'active' ? challenge.stakesGo : null
+  const stakesGo = challenge.stakesGo
   const setBy = creator.isViewer ? '' : `<p class="field-hint">Set by ${escapeHtml(creator.name)}.</p>`
   return `${termsText(challenge.terms, challenge.minorDigits, stakesGo)}${setBy}`
 }
@@ -1302,7 +1296,7 @@ export function renderGroup(
   }
   if (view.kind === 'solo') {
     return groupCard(
-      `${title}${count}${failure}${headlineText(view.headline)}<p>This is a solo challenge that has already started, so nobody can join it.</p>`,
+      `${title}${count}${failure}${headlineText(view.headline)}<p>This is a solo challenge, so nobody can join it.</p>`,
       toast,
     )
   }
@@ -1323,7 +1317,6 @@ export function renderGroup(
           creator,
           missingNames(view.members, challenge.missingRhythms),
           attempt?.startFailure,
-          attempt?.causeDraft,
         )
   const rhythm = rhythmControl(view.groupId, challenge, userId, attempt?.rhythmDraft)
   const checkIn = checkInControl(view.groupId, challenge, userId, attempt?.checkInDay)

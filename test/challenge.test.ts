@@ -237,29 +237,21 @@ test('a preset stores a null label and a blank custom label is rejected', async 
   }
 })
 
-const noCause = { cause: '' }
-
-test('one member starts a solo challenge owed to a cause and two to five start one with no cause', async () => {
+test('a solo challenge starts alone owed to its cause, and one with friends needs 2 to 5 active', async () => {
   const db = openTestDatabase()
   try {
     const people = await Promise.all(['Ada', 'Grace', 'Lin', 'Noor', 'Owen', 'Bea'].map((name) => person(db, name)))
     const [ada, grace] = people as [Account, Account]
-    const solo = await groupWith(db, [ada], 'Alone')
-    assert.deepEqual(await saveChallenge(db, ada, solo, terms()), { ok: true, name: 'No sweets' })
-    await pickRhythms(db, solo, [ada])
+    const solo = await groupWith(db, [ada], 'No sweets', { cause: 'Food bank' })
     const soloCard = await readMemberChallenge(db, ada, solo)
     if (!soloCard.ok || soloCard.card.phase !== 'draft') throw new Error('draft')
     assert.equal(soloCard.card.start, 'solo')
     assert.equal(soloCard.card.cap, 5)
-    assert.equal((await readChallengeHeadline(db, solo))?.stakesGo, null)
+    assert.deepEqual(soloCard.card.stakesGo, { kind: 'cause', name: 'Food bank' })
+    assert.ok(soloCard.card.checks.every((check) => check.done))
+    assert.deepEqual((await readChallengeHeadline(db, solo))?.stakesGo, { kind: 'cause', name: 'Food bank' })
 
-    assert.deepEqual(await startChallenge(db, ada, solo, noCause), { ok: false, failure: 'cause_empty' })
-    assert.deepEqual(await startChallenge(db, ada, solo, { cause: '   ' }), { ok: false, failure: 'cause_empty' })
-    assert.deepEqual(await startChallenge(db, ada, solo, { cause: 'a'.repeat(41) }), { ok: false, failure: 'cause_too_long' })
-    assert.deepEqual(await startChallenge(db, ada, solo, { cause: '😀'.repeat(41) }), { ok: false, failure: 'cause_too_long' })
-    assert.equal((await challengeOf(db, solo))?.phase, 'draft')
-
-    assert.deepEqual(await startChallenge(db, ada, solo, { cause: '  Food bank  ' }), { ok: true, name: 'No sweets' })
+    assert.deepEqual(await startChallenge(db, ada, solo), { ok: true, name: 'No sweets' })
     assert.deepEqual(await challengeOf(db, solo), {
       name: 'No sweets',
       typeKind: 'no_sugar',
@@ -272,43 +264,50 @@ test('one member starts a solo challenge owed to a cause and two to five start o
       cause: 'Food bank',
       joinsFromStart: true,
     })
-    assert.deepEqual(await startChallenge(db, ada, solo, { cause: 'Somewhere else' }), { ok: true, name: 'No sweets' })
-    assert.deepEqual(await startChallenge(db, ada, solo, noCause), { ok: true, name: 'No sweets' })
+    assert.deepEqual(await startChallenge(db, ada, solo), { ok: true, name: 'No sweets' })
     const startedSolo = await readMemberChallenge(db, ada, solo)
     if (!startedSolo.ok || startedSolo.card.phase !== 'active') throw new Error('active')
     assert.deepEqual(startedSolo.card.stakesGo, { kind: 'cause', name: 'Food bank' })
-    assert.deepEqual((await readChallengeHeadline(db, solo))?.stakesGo, { kind: 'cause', name: 'Food bank' })
 
-    const longest = await groupWith(db, [ada], 'Longest')
-    assert.deepEqual(await saveChallenge(db, ada, longest, terms()), { ok: true, name: 'No sweets' })
-    await pickRhythms(db, longest, [ada])
-    assert.deepEqual(await startChallenge(db, ada, longest, { cause: '😀'.repeat(40) }), { ok: true, name: 'No sweets' })
+    const alone = await groupWith(db, [ada])
+    const aloneCard = await readMemberChallenge(db, ada, alone)
+    if (!aloneCard.ok || aloneCard.card.phase !== 'draft') throw new Error('draft')
+    assert.equal(aloneCard.card.start, 'too_few')
+    assert.deepEqual(aloneCard.card.stakesGo, { kind: 'members' })
+    assert.deepEqual(aloneCard.card.checks, [
+      { step: 'terms_saved', done: true },
+      { step: 'rhythms_picked', done: true },
+      { step: 'headcount', done: false },
+    ])
+    assert.deepEqual(await startChallenge(db, ada, alone), { ok: false, failure: 'needs_friend' })
+    assert.equal((await challengeOf(db, alone))?.phase, 'draft')
+
+    const legacy = await legacyGroupWith(db, [ada], 'Old group')
+    assert.deepEqual(await saveChallenge(db, ada, legacy, terms()), { ok: true, name: 'No sweets' })
+    await pickRhythms(db, legacy, [ada])
+    assert.deepEqual(await startChallenge(db, ada, legacy), { ok: false, failure: 'needs_friend' })
+    assert.equal((await challengeOf(db, legacy))?.phase, 'draft')
 
     const pair = await groupWith(db, [ada, grace], 'Pair')
-    assert.deepEqual(await saveChallenge(db, ada, pair, terms()), { ok: true, name: 'No sweets' })
-    await pickRhythms(db, pair, [ada, grace])
+    await pickRhythms(db, pair, [grace])
     const pairCard = await readMemberChallenge(db, ada, pair)
     if (!pairCard.ok || pairCard.card.phase !== 'draft') throw new Error('draft')
     assert.equal(pairCard.card.start, 'group')
-    assert.deepEqual(await startChallenge(db, ada, pair, { cause: 'Food bank' }), { ok: false, failure: 'cause_for_group' })
-    assert.equal((await challengeOf(db, pair))?.phase, 'draft')
-    assert.deepEqual(await startChallenge(db, ada, pair, { cause: '  ' }), { ok: true, name: 'No sweets' })
-    assert.deepEqual(await startChallenge(db, grace, pair, { cause: 'Food bank' }), { ok: false, failure: 'not_creator' })
+    assert.deepEqual(await startChallenge(db, grace, pair), { ok: false, failure: 'not_creator' })
+    assert.deepEqual(await startChallenge(db, ada, pair), { ok: true, name: 'Pair' })
     const startedPair = await challengeOf(db, pair)
     assert.equal(startedPair?.phase, 'active')
-    assert.equal(startedPair?.phase === 'active' ? startedPair.cause : 'draft', null)
+    assert.equal(startedPair?.cause, null)
     const pairActive = await readMemberChallenge(db, grace, pair)
     if (!pairActive.ok || pairActive.card.phase !== 'active') throw new Error('active')
     assert.deepEqual(pairActive.card.stakesGo, { kind: 'members' })
 
     const five = await groupWith(db, people.slice(0, 5), 'Five')
-    assert.deepEqual(await saveChallenge(db, ada, five, terms()), { ok: true, name: 'No sweets' })
     await pickRhythms(db, five, people.slice(0, 5))
     assert.deepEqual(await joinGroup(db, people[5] as Account, five), { ok: false, failure: 'group_full' })
-    assert.deepEqual(await startChallenge(db, ada, five, noCause), { ok: true, name: 'No sweets' })
+    assert.deepEqual(await startChallenge(db, ada, five), { ok: true, name: 'Five' })
 
     const crowded = await groupWith(db, people.slice(0, 5), 'Crowded')
-    assert.deepEqual(await saveChallenge(db, ada, crowded, terms()), { ok: true, name: 'No sweets' })
     await groupRef(db, crowded).update(new FieldPath('members', (people[5] as Account).id), { joinedOn: utcToday(), leftOn: null })
     await pickRhythms(db, crowded, people)
     const crowdedCard = await readMemberChallenge(db, ada, crowded)
@@ -319,7 +318,7 @@ test('one member starts a solo challenge owed to a cause and two to five start o
       { step: 'rhythms_picked', done: true },
       { step: 'headcount', done: false },
     ])
-    assert.deepEqual(await startChallenge(db, ada, crowded, noCause), { ok: false, failure: 'outside_headcount' })
+    assert.deepEqual(await startChallenge(db, ada, crowded), { ok: false, failure: 'outside_headcount' })
     assert.equal((await challengeOf(db, crowded))?.phase, 'draft')
   } finally {
     await closeDatabase(db)
@@ -353,9 +352,9 @@ test('only the creator saves the terms and starts the challenge', async () => {
     assert.deepEqual(await saveChallenge(db, grace, groupId, terms({ stake: '50' })), { ok: false, failure: 'not_creator' })
     assert.equal(await stakeOf(db, groupId), 500)
     await pickRhythms(db, groupId, people)
-    assert.deepEqual(await startChallenge(db, grace, groupId, noCause), { ok: false, failure: 'not_creator' })
+    assert.deepEqual(await startChallenge(db, grace, groupId), { ok: false, failure: 'not_creator' })
     assert.equal((await challengeOf(db, groupId))?.phase, 'draft')
-    assert.deepEqual(await startChallenge(db, ada, groupId, noCause), { ok: true, name: 'No sweets' })
+    assert.deepEqual(await startChallenge(db, ada, groupId), { ok: true, name: 'No sweets' })
     assert.equal((await challengeOf(db, groupId))?.phase, 'active')
   } finally {
     await closeDatabase(db)
@@ -370,10 +369,10 @@ test('a challenge that started as a group stays one when everyone else drops out
     const groupId = await groupWith(db, people)
     assert.deepEqual(await saveChallenge(db, ada, groupId, terms()), { ok: true, name: 'No sweets' })
     await pickRhythms(db, groupId, people)
-    assert.deepEqual(await startChallenge(db, ada, groupId, noCause), { ok: true, name: 'No sweets' })
+    assert.deepEqual(await startChallenge(db, ada, groupId), { ok: true, name: 'No sweets' })
     await setLeftOn(db, groupId, grace.id, utcToday())
     await setLeftOn(db, groupId, lin.id, utcToday())
-    assert.deepEqual(await startChallenge(db, ada, groupId, { cause: 'Food bank' }), { ok: true, name: 'No sweets' })
+    assert.deepEqual(await startChallenge(db, ada, groupId), { ok: true, name: 'No sweets' })
     const card = await readMemberChallenge(db, ada, groupId)
     if (!card.ok || card.card.phase !== 'active') throw new Error('active')
     assert.deepEqual(card.card.stakesGo, { kind: 'members' })
@@ -403,7 +402,7 @@ test('the start waits until every active member has a rhythm', async () => {
     assert.deepEqual(await saveRhythm(db, ada, groupId, { interval: 'every_day' }), { ok: true, rhythm: 'every_day' })
     assert.deepEqual(await saveRhythm(db, grace, groupId, { interval: 'every_2_days' }), { ok: true, rhythm: 'every_2_days' })
     assert.deepEqual(await missing(), { picked: false, who: [lin.id] })
-    assert.deepEqual(await startChallenge(db, ada, groupId, noCause), { ok: false, failure: 'rhythms_missing' })
+    assert.deepEqual(await startChallenge(db, ada, groupId), { ok: false, failure: 'rhythms_missing' })
     assert.equal((await challengeOf(db, groupId))?.phase, 'draft')
 
     await setLeftOn(db, groupId, lin.id, utcToday())
@@ -428,7 +427,7 @@ test('started terms stay put, a rhythm changes until the start, and a late joine
     assert.deepEqual(await saveRhythm(db, grace, groupId, { interval: 'every_2_days' }), { ok: true, rhythm: 'every_2_days' })
     assert.deepEqual((await readGroup(db, groupId))?.rhythms[ada.id], { kind: 'every_day' })
 
-    assert.deepEqual(await startChallenge(db, ada, groupId, noCause), { ok: true, name: 'No sweets' })
+    assert.deepEqual(await startChallenge(db, ada, groupId), { ok: true, name: 'No sweets' })
     assert.deepEqual(await saveChallenge(db, ada, groupId, terms({ name: 'Other' })), { ok: false, failure: 'frozen' })
     assert.deepEqual(await saveChallenge(db, ada, groupId, terms()), { ok: true, name: 'No sweets' })
     assert.deepEqual(await saveChallenge(db, ada, groupId, terms({ stake: '6' })), { ok: false, failure: 'frozen' })
@@ -545,11 +544,10 @@ test('the group card saves the stake, starts with the people who are active, and
     assert.doesNotMatch(memberHtml, /value="XYZ"/)
     assert.match(memberHtml, /name="stake"/)
     assert.match(memberHtml, /<li data-done="true">[^]*?Save the challenge name, type, stake, and dates\. <span class="sr-only">Done\.<\/span>/)
-    assert.match(memberHtml, /<li data-done="true">[^]*?1 to 5 people are active\./)
-    assert.match(memberHtml, /Invite friends with the link, or start on your own\./)
-    assert.match(memberHtml, /<label for="start-cause">Who your missed days are owed to<\/label>/)
-    assert.match(memberHtml, /<input id="start-cause" name="cause"/)
-    assert.match(memberHtml, /action="[^"]+\/challenge\/start#start"/)
+    assert.match(memberHtml, /<li data-done="false">[^]*?2 to 5 people are active\./)
+    assert.match(memberHtml, /Start challenge appears here once every step above is done\./)
+    assert.doesNotMatch(memberHtml, /challenge\/start#start/)
+    assert.doesNotMatch(memberHtml, /name="cause"/)
     assert.match(memberHtml, /class="screen is-current"/)
     assert.doesNotMatch(memberHtml, /<section[^>]*\sid=/)
 
@@ -579,14 +577,9 @@ test('the group card saves the stake, starts with the people who are active, and
     assert.match(await unknown.text(), /Use a three-letter currency code/)
     assert.equal((await challengeOf(db, groupId))?.stakeMinor, 5)
 
-    const noCause = await post(base, `${groupPath}/challenge/start`, adaCookie, form({ cause: ' ' }))
-    assert.equal(noCause.status, 400)
-    assert.match(await noCause.text(), /<p class="start-error" role="alert">Type who your missed days are owed to\.<\/p>/)
-    const longCause = await post(base, `${groupPath}/challenge/start`, adaCookie, form({ cause: 'c'.repeat(41) }))
-    assert.equal(longCause.status, 400)
-    const longCauseHtml = await longCause.text()
-    assert.match(longCauseHtml, /Use 40 characters or fewer\./)
-    assert.match(longCauseHtml, new RegExp(`name="cause" value="${'c'.repeat(41)}"`))
+    const alone = await post(base, `${groupPath}/challenge/start`, adaCookie, '')
+    assert.equal(alone.status, 409)
+    assert.match(await alone.text(), /<p class="start-error" role="alert">Invite at least one friend before you start\.<\/p>/)
     assert.equal((await challengeOf(db, groupId))?.phase, 'draft')
 
     assert.equal((await post(base, `${groupPath}/join`, graceCookie)).status, 303)
@@ -617,14 +610,8 @@ test('the group card saves the stake, starts with the people who are active, and
     assert.doesNotMatch(gracePicked, /challenge\/start/)
     const pairHtml = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
     assert.match(pairHtml, /action="[^"]+\/challenge\/start#start"/)
+    assert.match(pairHtml, /<li data-done="true">[^]*?2 to 5 people are active\./)
     assert.doesNotMatch(pairHtml, /name="cause"/)
-    assert.doesNotMatch(pairHtml, /start on your own/)
-    const staleSolo = await post(base, `${groupPath}/challenge/start`, adaCookie, form({ cause: 'Food bank' }))
-    assert.equal(staleSolo.status, 409)
-    const staleSoloHtml = await staleSolo.text()
-    assert.match(staleSoloHtml, /Someone else joined, so this is a group challenge now and needs no cause\. Press Start again\./)
-    assert.doesNotMatch(staleSoloHtml, /name="cause"/)
-    assert.equal((await challengeOf(db, groupId))?.phase, 'draft')
 
     assert.equal((await post(base, `${groupPath}/join`, linCookie)).status, 303)
     const waitingOnLin = await post(base, `${groupPath}/challenge/start`, adaCookie, '')
@@ -783,21 +770,26 @@ test('a group is labelled by its own name if it has one, else by its challenge, 
   }
 })
 
-test('a member on their own starts a solo challenge and the card names the cause', async () => {
+test('a solo challenge starts with no input and the card names the cause', async () => {
   const db = openTestDatabase()
   const ada = await person(db, 'Ada')
   const adaCookie = await cookieFor(db, ada)
   const { server, base } = await listen(db)
   try {
-    const groupId = await groupWith(db, [ada], 'Alone')
-    assert.deepEqual(await saveChallenge(db, ada, groupId, terms()), { ok: true, name: 'No sweets' })
-    await pickRhythms(db, groupId, [ada])
+    const groupId = await groupWith(db, [ada], 'No sweets', { cause: 'Food & Shelter' })
     const groupPath = `/groups/${groupId}`
-    const started = await post(base, `${groupPath}/challenge/start`, adaCookie, form({ cause: 'Food & Shelter' }))
+    const draft = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
+    assert.match(draft, /<p>Missed days are owed to Food &amp; Shelter\.<\/p>/)
+    assert.match(draft, /<li data-done="true">[^]*?Just you, as a solo challenge\./)
+    assert.match(draft, /action="[^"]+\/challenge\/start#start"/)
+    assert.doesNotMatch(draft, /name="cause"/)
+
+    const started = await post(base, `${groupPath}/challenge/start`, adaCookie, '')
     assert.equal(started.status, 303)
     assert.equal(started.headers.get('location'), groupPath)
     const stored = await challengeOf(db, groupId)
-    assert.equal(stored?.phase === 'active' ? stored.cause : 'draft', 'Food & Shelter')
+    assert.equal(stored?.phase, 'active')
+    assert.equal(stored?.cause, 'Food & Shelter')
     const html = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
     assert.match(html, /<p>Missed days are owed to Food &amp; Shelter\.<\/p>/)
     assert.doesNotMatch(html, /challenge\/start/)

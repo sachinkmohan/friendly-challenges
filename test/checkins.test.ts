@@ -39,7 +39,7 @@ async function activeCrew(options: { start?: boolean } = {}): Promise<Crew> {
   await rhythm(db, grace, groupId, 'every_2_days')
   await rhythm(db, lin, groupId, 'every_day')
   if (options.start !== false) {
-    const started = await startChallenge(db, ada, groupId, { cause: '' })
+    const started = await startChallenge(db, ada, groupId)
     if (!started.ok) throw new Error(started.failure)
   }
   await setJoinedOn(db, groupId, '2026-11-05', [lin.id])
@@ -129,7 +129,7 @@ test('members in the group at the start log from the start date, and a late join
     if (!saved.ok) throw new Error(saved.failure)
     await rhythm(db, ada, groupId, 'every_day')
     await rhythm(db, grace, groupId, 'every_day')
-    const started = await startChallenge(db, ada, groupId, { cause: '' })
+    const started = await startChallenge(db, ada, groupId)
     if (!started.ok) throw new Error(started.failure)
     const joined = await joinGroup(db, noor, groupId)
     if (!joined.ok) throw new Error(joined.failure)

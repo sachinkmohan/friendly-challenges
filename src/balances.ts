@@ -268,8 +268,8 @@ type ActiveTerms = {
 
 function activeTerms(group: GroupDoc): ActiveTerms | null {
   const window = windowFrom(group.challenge)
+  if (!group.challenge || window?.phase !== 'active') return null
   const stakesGo = stakesGoFrom(group.challenge)
-  if (!group.challenge || window?.phase !== 'active' || !stakesGo) return null
   const minorDigits = minorDigitsOf(group.challenge.currency)
   if (minorDigits === null) throw new Error('currency')
   return {
