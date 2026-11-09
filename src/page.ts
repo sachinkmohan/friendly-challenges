@@ -428,7 +428,7 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
       .appbar { position: sticky; top: 0; z-index: 1; }
       .toast { position: fixed; }
       .screens { overflow: visible; }
-      .tabbar { position: sticky; bottom: 0; }
+      .tabbar { position: sticky; bottom: 0; height: calc(64px + 88px + env(safe-area-inset-bottom)); padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
       .indicator { display: none; }
     }
   </style>
