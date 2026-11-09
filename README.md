@@ -36,6 +36,10 @@ On the host, `npm start` talks to a real Firestore database. Create a Firebase p
 
 `netlify.toml` sends every path to the function in `netlify/functions/app.ts`, which runs the same app. Set `FIREBASE_SERVICE_ACCOUNT`, `FIREBASE_API_KEY`, and `FIREBASE_AUTH_DOMAIN` in the site's environment variables, scoped to Functions and Builds. Add `<site>.netlify.app`, and any custom domain, under **Authentication > Settings > Authorized domains**.
 
+## Install
+
+The app can sit on a phone's home screen. On Android, Chrome shows **Install app** on the Account tab, or use **Install app** in the browser menu. On iPhone, open the app in Safari, tap Share, then **Add to Home Screen**. The installed app opens full screen, with no browser bar. It keeps its own sign-in, so sign in once inside it. With no connection, it shows an offline page.
+
 ## Groups
 
 Sign in. Choose **Create a group** and type a name. You are the first member. The group page shows the members, the active count, each join date, and an invite link.
