@@ -38,7 +38,7 @@ On the host, `npm start` talks to a real Firestore database. Create a Firebase p
 
 ## Install
 
-The app can sit on a phone's home screen. On Android, Chrome shows **Install app** on the Account tab, or use **Install app** in the browser menu. On iPhone, open the app in Safari, tap Share, then **Add to Home Screen**. The installed app opens full screen, with no browser bar. It keeps its own sign-in, so sign in once inside it. With no connection, it shows an offline page.
+The app can sit on a phone's home screen. On Android, Chrome shows **Install app** on the Account tab. If you close that dialog, the tab says to use **Install app** in the browser menu. On iPhone, Home shows a card with the steps for your browser, and the Account tab shows them too. Safari, Chrome, and Edge can add the app to the Home Screen. Other iPhone browsers are told to open the page in Safari. Tap **Done** and the card stays away on that browser. The installed app opens full screen, with no browser bar. It keeps its own sign-in, so sign in once inside it. With no connection, it shows an offline page.
 
 ## Groups
 
