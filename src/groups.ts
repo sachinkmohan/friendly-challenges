@@ -30,6 +30,7 @@ export type GroupView =
       kind: 'members'
       groupId: GroupId
       label: string
+      hasGroupName: boolean
       activeCount: number
       creatorId: string
       members: readonly MemberLine[]
@@ -64,6 +65,17 @@ export const deleteFailureCopy = {
 } as const satisfies Record<DeleteFailure, string>
 
 export type DeleteResult = { ok: true; label: string } | { ok: false; failure: DeleteFailure }
+
+export type DropNameFailure = 'group_missing' | 'not_member' | 'not_creator' | 'no_challenge'
+
+export const dropNameFailureCopy = {
+  group_missing: 'That challenge does not exist.',
+  not_member: 'Join the challenge before you change its name.',
+  not_creator: 'Only the person who made the challenge can change its name.',
+  no_challenge: 'Save the challenge name first, then use it here.',
+} as const satisfies Record<DropNameFailure, string>
+
+export type DropNameResult = { ok: true; label: string } | { ok: false; failure: DropNameFailure }
 
 class JoinRejected extends Error {
   readonly failure: JoinFailure
@@ -112,6 +124,20 @@ export async function deleteGroup(db: Database, actor: Account, groupId: GroupId
   return { ok: true, label: outcome.label }
 }
 
+// Only the label changes, so it is allowed after Start too (ADR 0014). A second press finds no name and writes nothing.
+export async function dropGroupName(db: Database, actor: Account, groupId: GroupId): Promise<DropNameResult> {
+  const outcome = await db.runTransaction(async (tx): Promise<{ failure: DropNameFailure } | { label: string }> => {
+    const group = await readGroup(db, groupId, tx)
+    if (!group) return { failure: 'group_missing' }
+    if (memberOf(group, actor.id)?.leftOn !== null) return { failure: 'not_member' }
+    if (group.createdBy !== actor.id) return { failure: 'not_creator' }
+    if (!group.challenge) return { failure: 'no_challenge' }
+    if (group.name !== null) tx.update(groupRef(db, groupId), { name: null })
+    return { label: group.challenge.name }
+  })
+  return 'failure' in outcome ? { ok: false, failure: outcome.failure } : { ok: true, label: outcome.label }
+}
+
 /** users must hold every active member when the viewer is one of them. */
 export function groupViewFrom(
   groupId: GroupId,
@@ -133,7 +159,7 @@ export function groupViewFrom(
         (a, b) =>
           compare(a.joinedOn, b.joinedOn) || compare(a.displayName, b.displayName) || compare(a.userId, b.userId),
       )
-    return { kind: 'members', groupId, label, activeCount, creatorId: group.createdBy, members }
+    return { kind: 'members', groupId, label, hasGroupName: group.name !== null, activeCount, creatorId: group.createdBy, members }
   }
   if (isSolo(group)) return { kind: 'solo', groupId, label, activeCount }
   if (activeCount >= ACTIVE_MEMBER_CAP) return { kind: 'full', groupId, label, activeCount }

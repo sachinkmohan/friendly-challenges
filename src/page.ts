@@ -33,7 +33,7 @@ import { CURRENCY_CODES } from './currencies.ts'
 import { DAY_MARK_LABELS, type GroupCalendar, type Heatmap, type MarkedDay } from './calendar.ts'
 import { dropoutFailureCopy, type DropoutFailure, type DropoutInput } from './dropouts.ts'
 import { CHECK_IN_LABELS, checkInFailureCopy, type CheckIn, type CheckInFailure } from './checkins.ts'
-import { deleteFailureCopy, parseGroupId, type DeleteFailure, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
+import { deleteFailureCopy, dropNameFailureCopy, parseGroupId, type DeleteFailure, type DropNameFailure, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
 import type { Browser, Os } from './browser.ts'
 import { authFailureCopy, type Account, type AuthFailure, type Viewer } from './identity.ts'
 
@@ -551,6 +551,7 @@ const checkInSuffix = '/check-in'
 const paymentSuffix = '/payment'
 const dropoutSuffix = '/dropout'
 const deleteSuffix = '/delete'
+const dropNameSuffix = '/drop-name'
 
 export type HomePage =
   | Extract<Viewer, { state: 'signed_out' }>
@@ -568,6 +569,7 @@ export type GroupRoute =
   | { kind: 'record_payment'; groupId: GroupId }
   | { kind: 'record_dropout'; groupId: GroupId }
   | { kind: 'delete_group'; groupId: GroupId }
+  | { kind: 'drop_group_name'; groupId: GroupId }
 
 export function groupHref(groupId: GroupId): string {
   return `${groupsRoot}/${groupId}`
@@ -621,6 +623,7 @@ function routeSuffix(
     | 'record_payment'
     | 'record_dropout'
     | 'delete_group'
+    | 'drop_group_name'
     | 'join',
 ): GroupRoute | null {
   if (!rest.endsWith(suffix) || rest.length <= suffix.length) return null
@@ -644,6 +647,7 @@ export function matchGroupPath(path: string): GroupRoute | null {
     routeSuffix(rest, paymentSuffix, 'record_payment') ??
     routeSuffix(rest, dropoutSuffix, 'record_dropout') ??
     routeSuffix(rest, deleteSuffix, 'delete_group') ??
+    routeSuffix(rest, dropNameSuffix, 'drop_group_name') ??
     routeSuffix(rest, joinSuffix, 'join')
   if (suffixed) return suffixed
   if (rest.includes('/')) return null
@@ -799,6 +803,7 @@ export type ChallengeAttempt = {
   dropoutFailure?: DropoutFailure
   dropoutDraft?: DropoutInput
   deleteFailure?: DeleteFailure
+  dropNameFailure?: DropNameFailure
   draft?: ChallengeInput
   rhythmDraft?: RhythmInput
   checkInDay?: string
@@ -833,6 +838,7 @@ function failureParagraph(attempt?: ChallengeAttempt): string {
   if (attempt?.paymentFailure) return `<p>${escapeHtml(paymentFailureCopy[attempt.paymentFailure])}</p>`
   if (attempt?.dropoutFailure) return `<p>${escapeHtml(dropoutFailureCopy[attempt.dropoutFailure])}</p>`
   if (attempt?.deleteFailure) return `<p>${escapeHtml(deleteFailureCopy[attempt.deleteFailure])}</p>`
+  if (attempt?.dropNameFailure) return `<p>${escapeHtml(dropNameFailureCopy[attempt.dropNameFailure])}</p>`
   return ''
 }
 
@@ -1195,6 +1201,15 @@ function deleteForm(view: Extract<GroupView, { kind: 'members' }>, userId: strin
     </form>`
 }
 
+function dropNameForm(view: Extract<GroupView, { kind: 'members' }>, challenge: MemberChallengeCard, userId: string): string {
+  if (userId !== view.creatorId || !view.hasGroupName || challenge.phase === 'unopened') return ''
+  const action = escapeHtml(`${groupHref(view.groupId)}${dropNameSuffix}`)
+  return `<form method="post" action="${action}">
+      <p class="field-hint">This is the group name you gave it. The challenge is called ${escapeHtml(challenge.terms.name)}.</p>
+      <button type="submit" class="secondary">Use the challenge name instead</button>
+    </form>`
+}
+
 function startForm(groupId: GroupId): string {
   const action = escapeHtml(`${groupHref(groupId)}${challengeStartSuffix}#start`)
   return `<form method="post" action="${action}"><button type="submit">Start challenge</button></form>`
@@ -1325,6 +1340,7 @@ export function renderGroup(
   return groupCard(`
     ${title}
     ${count}
+    ${dropNameForm(view, challenge, userId)}
     ${failure}
     ${terms}
     ${rhythm}

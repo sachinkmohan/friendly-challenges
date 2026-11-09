@@ -3,11 +3,11 @@ import type { Server } from 'node:http'
 import { test } from 'node:test'
 import { upsertAccount } from '../src/accounts.ts'
 import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
-import { countDocs, labelOf, readGroup, utcToday } from '../src/store.ts'
+import { countDocs, groupRef, labelOf, readGroup, utcToday } from '../src/store.ts'
 import { createSession } from '../src/sessions.ts'
-import { saveRhythm, startChallenge } from '../src/challenge.ts'
-import { joinGroup } from '../src/groups.ts'
-import { closeServer, cookieFor, createForm, fakeVerifier, googleToken, groupWith, listen, person } from './support/fixtures.ts'
+import { saveChallenge, saveRhythm, startChallenge } from '../src/challenge.ts'
+import { dropGroupName, joinGroup, parseGroupId } from '../src/groups.ts'
+import { closeServer, cookieFor, createForm, fakeVerifier, fixtureTerms, googleToken, groupWith, legacyGroupWith, listen, person } from './support/fixtures.ts'
 import { viewGroup } from './support/reads.ts'
 
 type Person = { cookie: string; userId: string }
@@ -398,5 +398,85 @@ test('the join page of a solo challenge says nobody can join it, before and afte
   } finally {
     await closeServer(server)
     await closeDatabase(db)
+  }
+})
+
+test('an old group keeps its name until its creator uses the challenge name instead, before or after the start', async () => {
+  const db = openTestDatabase()
+  try {
+    const [ada, grace, lin] = await Promise.all(['Ada', 'Grace', 'Lin'].map((name) => person(db, name)))
+    const groupId = await legacyGroupWith(db, [ada, grace], 'Pantry crew')
+    assert.deepEqual(await dropGroupName(db, ada, groupId), { ok: false, failure: 'no_challenge' })
+    assert.deepEqual(await saveChallenge(db, ada, groupId, { ...fixtureTerms, name: 'No sweets' }), { ok: true, name: 'No sweets' })
+    assert.deepEqual(await joinGroup(db, grace, groupId), { ok: true, groupId, label: 'Pantry crew' })
+
+    assert.deepEqual(await dropGroupName(db, grace, groupId), { ok: false, failure: 'not_creator' })
+    assert.deepEqual(await dropGroupName(db, lin, groupId), { ok: false, failure: 'not_member' })
+    const missing = parseGroupId('00000000-0000-4000-8000-000000000099')
+    if (!missing) throw new Error('id')
+    assert.deepEqual(await dropGroupName(db, ada, missing), { ok: false, failure: 'group_missing' })
+    assert.equal((await readGroup(db, groupId))?.name, 'Pantry crew')
+
+    assert.deepEqual(await dropGroupName(db, ada, groupId), { ok: true, label: 'No sweets' })
+    const dropped = await readGroup(db, groupId)
+    assert.ok(dropped)
+    assert.equal(dropped.name, null)
+    assert.equal(labelOf(dropped), 'No sweets')
+    const written = (await groupRef(db, groupId).get()).updateTime
+    assert.deepEqual(await dropGroupName(db, ada, groupId), { ok: true, label: 'No sweets' })
+    assert.deepEqual((await groupRef(db, groupId).get()).updateTime, written)
+
+    const started = await legacyGroupWith(db, [ada, grace], 'Old pair')
+    assert.deepEqual(await saveChallenge(db, ada, started, fixtureTerms), { ok: true, name: 'Morning run' })
+    for (const who of [ada, grace]) await saveRhythm(db, who, started, { interval: 'every_day' })
+    assert.deepEqual(await startChallenge(db, ada, started), { ok: true, name: 'Morning run' })
+    assert.deepEqual(await dropGroupName(db, ada, started), { ok: true, label: 'Morning run' })
+    assert.equal((await readGroup(db, started))?.challenge?.phase, 'active')
+    assert.equal((await readGroup(db, started))?.name, null)
+  } finally {
+    await closeDatabase(db)
+  }
+})
+
+test('only the creator of a named group sees "Use the challenge name instead", and pressing it relabels the page', async () => {
+  const db = openTestDatabase()
+  const [adaAccount, graceAccount] = await Promise.all(['Ada', 'Grace'].map((name) => person(db, name)))
+  const ada = { cookie: await cookieFor(db, adaAccount) }
+  const grace = { cookie: await cookieFor(db, graceAccount) }
+  const { server, base } = await listen(db)
+  const page = async (cookie: string, path: string) => (await fetch(`${base}${path}`, { headers: { cookie } })).text()
+  try {
+    const groupId = await legacyGroupWith(db, [adaAccount, graceAccount], 'Pantry crew')
+    const groupPath = `/groups/${groupId}`
+    assert.doesNotMatch(await page(ada.cookie, groupPath), /Use the challenge name instead/)
+    assert.deepEqual(await saveChallenge(db, adaAccount, groupId, { ...fixtureTerms, name: 'No sweets' }), { ok: true, name: 'No sweets' })
+
+    const before = await page(ada.cookie, groupPath)
+    assert.match(before, /<h2>Pantry crew<\/h2>/)
+    assert.match(before, new RegExp(`action="${groupPath}/drop-name"`))
+    assert.match(before, /Use the challenge name instead/)
+    assert.doesNotMatch(await page(grace.cookie, groupPath), /Use the challenge name instead/)
+
+    const refused = await postForm(base, `${groupPath}/drop-name`, grace.cookie)
+    assert.equal(refused.status, 403)
+    assert.match(await refused.text(), /Only the person who made the challenge can change its name\./)
+    assert.equal((await fetch(`${base}${groupPath}/drop-name`, { headers: { cookie: ada.cookie } })).status, 405)
+    assert.equal((await postForm(base, `${groupPath}/drop-name`, null)).status, 401)
+
+    const dropped = await postForm(base, `${groupPath}/drop-name`, ada.cookie)
+    assert.equal(dropped.status, 303)
+    assert.equal(dropped.headers.get('location'), groupPath)
+    const toast = (dropped.headers as Headers & { getSetCookie: () => string[] }).getSetCookie().find((line) => line.startsWith('toast='))
+    assert.equal(decodeURIComponent((toast ?? '').split(';')[0]!.slice('toast='.length)), 'Now called No sweets.')
+    const after = await page(ada.cookie, groupPath)
+    assert.match(after, /<h2>No sweets<\/h2>/)
+    assert.doesNotMatch(after, /Use the challenge name instead/)
+    assert.match(await page(ada.cookie, '/'), /<span class="group-name">No sweets<\/span>/)
+    assert.equal((await postForm(base, `${groupPath}/drop-name`, ada.cookie)).status, 303)
+
+    const fresh = await postForm(base, '/groups', ada.cookie, createForm({ name: 'Evening run' }))
+    assert.doesNotMatch(await page(ada.cookie, fresh.headers.get('location') ?? ''), /Use the challenge name instead/)
+  } finally {
+    await close(server, db)
   }
 })

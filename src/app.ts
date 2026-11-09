@@ -17,7 +17,7 @@ import { listHeatmaps, utcToday } from './calendar.ts'
 import type { IsoDate } from './challenge.ts'
 import { logCheckIn, type CheckInInput } from './checkins.ts'
 import { recordDropout, type DropoutFailure, type DropoutInput } from './dropouts.ts'
-import { deleteGroup, joinGroup, listHomeGroups, type GroupId } from './groups.ts'
+import { deleteGroup, dropGroupName, joinGroup, listHomeGroups, type GroupId } from './groups.ts'
 import { loadGroupPage, type GroupPage } from './grouppage.ts'
 import { readBrowser } from './browser.ts'
 import { googleIdentity, type Account, type AuthFailure, type FirebaseWebConfig, type IdToken, type Viewer } from './identity.ts'
@@ -233,6 +233,10 @@ async function handleGroup(
   }
   if (route.kind === 'delete_group') {
     await postDelete(req, res, method, origin, route.groupId, viewer, deps)
+    return
+  }
+  if (route.kind === 'drop_group_name') {
+    await postDropName(req, res, method, origin, route.groupId, viewer, deps)
     return
   }
   if (method !== 'POST') return rejectMethod(res, 'POST')
@@ -545,6 +549,34 @@ async function postDelete(
     return
   }
   await sendGroupPage(res, deleted.failure === 'not_creator' ? 403 : 400, viewer, groupId, origin, deps, attempt)
+}
+
+async function postDropName(
+  req: IncomingMessage,
+  res: ServerResponse,
+  method: string,
+  origin: string,
+  groupId: GroupId,
+  viewer: Viewer,
+  deps: AppDeps,
+): Promise<void> {
+  if (method !== 'POST') return rejectMethod(res, 'POST')
+  req.resume()
+  if (viewer.state === 'signed_out') {
+    await sendGroupPage(res, 401, viewer, groupId, origin, deps)
+    return
+  }
+  const dropped = await dropGroupName(deps.db, viewer.account, groupId)
+  if (dropped.ok) {
+    sendRedirect(res, groupHref(groupId), [toastCookie({ kind: 'name_dropped', label: dropped.label })], 303)
+    return
+  }
+  if (dropped.failure === 'group_missing') {
+    notFound(res)
+    return
+  }
+  const status = dropped.failure === 'no_challenge' ? 409 : 403
+  await sendGroupPage(res, status, viewer, groupId, origin, deps, { dropNameFailure: dropped.failure })
 }
 
 function rejectForm(res: ServerResponse, failure: 'too_large' | 'bad_type'): void {
