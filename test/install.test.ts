@@ -32,10 +32,14 @@ test('the manifest opens the app full screen at the home page with icons that ma
   assert.equal(response.status, 200)
   assert.match(response.headers.get('content-type') ?? '', /^application\/manifest\+json/)
   const manifest = (await response.json()) as {
+    name: string
+    short_name: string
     display: string
     start_url: string
     icons: { src: string; sizes: string; type: string }[]
   }
+  assert.equal(manifest.name, 'Friendly challenges')
+  assert.equal(manifest.short_name, 'Friendly challenges', 'the home screen label is the full app name')
   assert.equal(manifest.display, 'standalone')
   assert.equal(manifest.start_url, '/')
   const sizes = manifest.icons.map((icon) => icon.sizes)
@@ -106,7 +110,7 @@ function steps(html: string): string[] {
 test('home on iPhone Safari carries a hidden card with the Safari steps and a Done button', async () => {
   const { home: screen, account } = await home(agents.safari)
   const card = installCard(screen)
-  assert.match(card, /<h2>Put Challenges on your Home Screen<\/h2>/)
+  assert.match(card, /<h2>Put Friendly challenges on your Home Screen<\/h2>/)
   assert.deepEqual(steps(card), ['Tap Share [icon]. On iOS 26, tap ⋯ first.', 'Tap Add to Home Screen [icon].', 'Tap Add.'])
   assert.match(card, /You'll sign in once inside the app\./)
   assert.match(card, /<button type="button" class="install-done secondary">Done<\/button>/)
