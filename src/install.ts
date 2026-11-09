@@ -1,4 +1,5 @@
 import { crc32, deflateSync } from 'node:zlib'
+import type { IosInstall } from './browser.ts'
 
 export type InstallAsset = { readonly contentType: string; readonly body: Buffer | string; readonly cacheControl: string }
 
@@ -119,26 +120,61 @@ export const installHead = `<link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <meta name="apple-mobile-web-app-title" content="Challenges">`
 
-export const installPrompt = `<div class="install" hidden>
-          <p class="section-title">Install the app</p>
-          <p class="field-hint install-ios" hidden>In Safari, tap Share, then Add to Home Screen.</p>
-          <button type="button" class="install-app" hidden>Install app</button>
-        </div>`
+const iconAttrs = 'class="install-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"'
+const SHARE_ICON = `<svg ${iconAttrs}><path d="M8.5 9.5H7a2 2 0 0 0-2 2V19a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7.5a2 2 0 0 0-2-2h-1.5"/><path d="M12 14.5V3M8.5 6.5 12 3l3.5 3.5"/></svg>`
+const ADD_ICON = `<svg ${iconAttrs}><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8.5v7M8.5 12h7"/></svg>`
 
-// iOS Safari never fires beforeinstallprompt, so it gets the Share steps instead. A used prompt cannot show again, so the block hides either way.
+const addSteps = [`Tap Add to Home Screen ${ADD_ICON}.`, 'Tap Add.']
+
+const iosInstallSteps: Readonly<Record<IosInstall, readonly string[]>> = {
+  safari: [`Tap Share ${SHARE_ICON}. On iOS 26, tap ⋯ first.`, ...addSteps],
+  chrome: [`Tap Share ${SHARE_ICON} in the address bar.`, ...addSteps],
+  edge: [`Tap ⋯, then Share ${SHARE_ICON}.`, ...addSteps],
+  use_safari: [],
+}
+
+export function iosSteps(kind: IosInstall): string {
+  const steps = iosInstallSteps[kind]
+  const body =
+    steps.length === 0
+      ? '<p class="install-steps">Open this page in Safari to install the app.</p>'
+      : `<ol class="install-steps">${steps.map((step) => `<li>${step}</li>`).join('')}</ol>`
+  return `${body}
+          <p class="field-hint">You'll sign in once inside the app.</p>`
+}
+
+export function installPrompt(iosInstall: IosInstall | null): string {
+  const ios = iosInstall ? `<div class="install-ios" hidden>${iosSteps(iosInstall)}</div>` : ''
+  return `<div class="install" hidden>
+          <p class="section-title">Install the app</p>
+          ${ios}
+          <button type="button" class="install-app" hidden>Install app</button>
+          <p class="field-hint install-menu" hidden>Open the browser menu and choose Install app.</p>
+        </div>`
+}
+
+export function installCard(iosInstall: IosInstall): string {
+  return `<article class="card install-card" hidden>
+        <h2>Put Challenges on your Home Screen</h2>
+        ${iosSteps(iosInstall)}
+        <button type="button" class="install-done secondary">Done</button>
+      </article>`
+}
+
+// iOS never fires beforeinstallprompt, so the server picks the Share steps from the user agent.
+// A closed install dialog cannot reopen until Chrome fires the event again, so the menu hint stands in meanwhile.
 export const installScript = `if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function () {})
     if (!matchMedia('(display-mode: standalone)').matches && navigator.standalone !== true) {
       var installEvent = null
-      var reveal = function (selector) {
-        document.querySelectorAll(selector).forEach(function (node) { node.hidden = false })
+      var setHidden = function (selector, hidden) {
+        document.querySelectorAll(selector).forEach(function (node) { node.hidden = hidden })
       }
-      var hideInstall = function () {
-        document.querySelectorAll('.install').forEach(function (block) { block.hidden = true })
-      }
+      var hideInstall = function () { setHidden('.install', true) }
       window.addEventListener('beforeinstallprompt', function (event) {
         event.preventDefault()
         installEvent = event
-        reveal('.install, .install-app')
+        setHidden('.install, .install-app', false)
+        setHidden('.install-menu', true)
       })
       document.querySelectorAll('.install-app').forEach(function (button) {
         button.addEventListener('click', function () {
@@ -146,9 +182,25 @@ export const installScript = `if ('serviceWorker' in navigator) navigator.servic
           var shown = installEvent
           installEvent = null
           shown.prompt()
-          shown.userChoice.then(hideInstall)
+          shown.userChoice.then(function (choice) {
+            if (choice.outcome === 'accepted') return hideInstall()
+            setHidden('.install-app', true)
+            setHidden('.install-menu', false)
+          })
         })
       })
       window.addEventListener('appinstalled', hideInstall)
-      if (navigator.standalone === false) reveal('.install, .install-ios')
+      document.querySelectorAll('.install-ios').forEach(function (steps) {
+        steps.hidden = false
+        steps.closest('.install').hidden = false
+      })
+      var installDone = false
+      try { installDone = localStorage.getItem('install-card-done') === '1' } catch (error) {}
+      document.querySelectorAll('.install-card').forEach(function (card) {
+        card.hidden = installDone
+        card.querySelector('.install-done').addEventListener('click', function () {
+          card.hidden = true
+          try { localStorage.setItem('install-card-done', '1') } catch (error) {}
+        })
+      })
     }`

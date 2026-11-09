@@ -130,6 +130,7 @@ export function createApp(deps: AppDeps) {
                   account: viewer.account,
                   groups: await listHomeGroups(deps.db, viewer.account),
                   heatmaps: await listHeatmaps(deps.db, viewer.account, today(deps)),
+                  browser: readBrowser(req.headers['user-agent']),
                 },
                 toast.text,
               )

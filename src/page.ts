@@ -33,7 +33,7 @@ import { CHECK_IN_LABELS, checkInFailureCopy, type CheckIn, type CheckInFailure 
 import { deleteFailureCopy, parseGroupId, type DeleteFailure, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
 import type { Browser, Os } from './browser.ts'
 import { authFailureCopy, type Account, type AuthFailure, type Viewer } from './identity.ts'
-import { installHead, installPrompt, installScript } from './install.ts'
+import { installCard, installHead, installPrompt, installScript } from './install.ts'
 
 function escapeHtml(value: string): string {
   return value
@@ -212,6 +212,12 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
     .install { margin-top: 24px; padding-top: 16px; border-top: 1px solid #e7e0d4; }
     .install .section-title { margin-top: 0; }
     .install .field-hint { margin-top: 8px; }
+    .install-card { margin-bottom: 16px; }
+    .install-steps { margin: 8px 0 0; color: #5c564c; }
+    ol.install-steps { padding-left: 22px; }
+    .install-steps li + li { margin-top: 4px; }
+    .install-steps + .field-hint { margin-top: 8px; }
+    .install-icon { vertical-align: middle; margin-top: -3px; color: #1c1915; }
     .new-group a.button { background: #fffdf8; color: #1c1915; box-shadow: inset 0 0 0 1.5px #1c1915; }
     .count { color: #5c564c; }
     .members time, .rhythm { color: #5c564c; }
@@ -565,7 +571,7 @@ const deleteSuffix = '/delete'
 
 export type HomePage =
   | Extract<Viewer, { state: 'signed_out' }>
-  | { state: 'signed_in'; account: Account; groups: readonly HomeGroup[]; heatmaps: readonly Heatmap[] }
+  | { state: 'signed_in'; account: Account; groups: readonly HomeGroup[]; heatmaps: readonly Heatmap[]; browser: Browser }
 
 export type GroupRoute =
   | { kind: 'new' }
@@ -735,17 +741,19 @@ function signedOutScreens(viewer: SignedOut): string {
         <h2>Account</h2>
         <p>No account on this device yet. Google sign-in stores one account for this app.</p>
         ${signInControl(viewer, '/')}
-        ${installPrompt}
+        ${installPrompt(viewer.browser.iosInstall)}
       </article>
     </section>
   `
 }
 
-function signedInScreens(account: Account, groups: readonly HomeGroup[], heatmaps: readonly Heatmap[]): string {
+function signedInScreens(page: Extract<HomePage, { state: 'signed_in' }>): string {
+  const { account, groups, heatmaps, browser } = page
   const name = escapeHtml(account.displayName)
   const email = escapeHtml(account.email)
   return `
     <section id="home" class="screen">
+      ${browser.iosInstall ? installCard(browser.iosInstall) : ''}
       <article class="card">
         <h2>Hello, ${name}</h2>
         ${homeGroups(groups)}
@@ -769,14 +777,14 @@ function signedInScreens(account: Account, groups: readonly HomeGroup[], heatmap
         <form method="post" action="/logout">
           <button type="submit">Sign out</button>
         </form>
-        ${installPrompt}
+        ${installPrompt(browser.iosInstall)}
       </article>
     </section>
   `
 }
 
 export function renderHome(page: HomePage, toast: string | null = null): string {
-  const screens = page.state === 'signed_out' ? signedOutScreens(page) : signedInScreens(page.account, page.groups, page.heatmaps)
+  const screens = page.state === 'signed_out' ? signedOutScreens(page) : signedInScreens(page)
   return frame(screens, tabBar('#home', '#account'), toast)
 }
 
