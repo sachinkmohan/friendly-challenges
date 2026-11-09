@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { readBrowser, type Browser } from '../src/browser.ts'
 import { closeDatabase, openTestDatabase } from '../src/db.ts'
 import { parseGroupId } from '../src/groups.ts'
-import { renderGroup, renderHome, renderNewGroup } from '../src/page.ts'
+import { renderGroup, renderHome, renderNewChallenge } from '../src/page.ts'
 import { closeServer, groupWith, listen, person } from './support/fixtures.ts'
 
 const agents: readonly { name: string; agent: string | undefined; expected: Browser }[] = [
@@ -148,7 +148,7 @@ test('an in-app browser on Android gets the invite link and an open-in-browser b
 })
 
 test('an in-app browser on iPhone gets steps that do not name Safari', () => {
-  const shown = card(renderNewGroup(signedOut({ inApp: true, os: 'ios' })))
+  const shown = card(renderNewChallenge(signedOut({ inApp: true, os: 'ios' })))
   assert.match(shown, /^<div class="in-app">/)
   assert.match(shown, new RegExp(`value="${origin}/groups/new"`))
   assert.match(shown, /Open in browser/)

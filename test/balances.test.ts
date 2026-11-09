@@ -227,7 +227,7 @@ test('a payment is always in the challenge currency and can go to a member who l
   try {
     assert.deepEqual(await recordDropout(db, lin, groupId, { memberId: lin.id, lastDay: '2026-11-02' }, today), {
       ok: true,
-      groupName: 'Morning run',
+      groupName: 'No sweets',
       memberName: 'Lin',
       lastDay: '2026-11-02',
     })

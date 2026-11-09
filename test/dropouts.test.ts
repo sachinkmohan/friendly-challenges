@@ -88,13 +88,13 @@ test('the member or the group creator records a dropout and anyone else cannot',
     assert.deepEqual(await drop(ada, grace.id, '2026-11-07'), { ok: false, failure: 'future_day' })
     assert.deepEqual(await leftOn(db, groupId), { [ada.id]: null, [grace.id]: null, [lin.id]: null })
 
-    assert.deepEqual(await drop(lin, lin.id, '2026-11-04'), { ok: true, groupName: 'Morning run', memberName: 'Lin', lastDay: '2026-11-04' })
-    assert.deepEqual(await drop(ada, grace.id, '2026-11-06'), { ok: true, groupName: 'Morning run', memberName: 'Grace', lastDay: '2026-11-06' })
+    assert.deepEqual(await drop(lin, lin.id, '2026-11-04'), { ok: true, groupName: 'No sweets', memberName: 'Lin', lastDay: '2026-11-04' })
+    assert.deepEqual(await drop(ada, grace.id, '2026-11-06'), { ok: true, groupName: 'No sweets', memberName: 'Grace', lastDay: '2026-11-06' })
     assert.deepEqual(await leftOn(db, groupId), { [ada.id]: null, [grace.id]: '2026-11-06', [lin.id]: '2026-11-04' })
 
     assert.deepEqual(await drop(ada, lin.id, '2026-11-05'), { ok: false, failure: 'bad_member' })
     assert.deepEqual(await drop(lin, lin.id, '2026-11-05'), { ok: false, failure: 'not_member' })
-    assert.deepEqual(await drop(ada, ada.id, '2026-11-01'), { ok: true, groupName: 'Morning run', memberName: 'Ada', lastDay: '2026-11-01' })
+    assert.deepEqual(await drop(ada, ada.id, '2026-11-01'), { ok: true, groupName: 'No sweets', memberName: 'Ada', lastDay: '2026-11-01' })
     assert.deepEqual(await recordDropout(db, ada, crypto.randomUUID() as GroupId, { memberId: ada.id, lastDay: '2026-11-01' }, today), {
       ok: false,
       failure: 'group_missing',
@@ -130,7 +130,7 @@ test('debts through the last day stay and later days owe the leaver nothing and 
 
     assert.deepEqual(await recordDropout(db, lin, groupId, { memberId: lin.id, lastDay: '2026-11-03' }, today), {
       ok: true,
-      groupName: 'Morning run',
+      groupName: 'No sweets',
       memberName: 'Lin',
       lastDay: '2026-11-03',
     })

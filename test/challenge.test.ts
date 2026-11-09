@@ -20,7 +20,7 @@ import { joinGroup, parseGroupId, type GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
 import { safeReturnPath } from '../src/page.ts'
 import { activeMemberIds, groupRef, labelOf, readGroup, utcToday, type ChallengeDoc } from '../src/store.ts'
-import { closeServer, cookieFor, groupWith, listen, person, post, setLeftOn } from './support/fixtures.ts'
+import { closeServer, cookieFor, groupWith, legacyGroupWith, listen, person, post, setLeftOn } from './support/fixtures.ts'
 import { readChallengeHeadline, readMemberChallenge } from './support/reads.ts'
 
 function day(value: string) {
@@ -122,7 +122,7 @@ test('the stake scales by the currency exponent and an unknown code is rejected'
   try {
     const ada = await person(db, 'Ada')
     const outsider = await person(db, 'Grace')
-    const groupId = await groupWith(db, [ada])
+    const groupId = await legacyGroupWith(db, [ada])
     const missing = parseGroupId('00000000-0000-4000-8000-000000000099')
     if (!missing) throw new Error('id')
     assert.deepEqual(await saveChallenge(db, ada, missing, terms()), { ok: false, failure: 'group_missing' })
@@ -199,7 +199,7 @@ test('a preset stores a null label and a blank custom label is rejected', async 
   const db = openTestDatabase()
   try {
     const ada = await person(db, 'Ada')
-    const groupId = await groupWith(db, [ada])
+    const groupId = await legacyGroupWith(db, [ada])
     assert.deepEqual(await saveChallenge(db, ada, groupId, terms({ type: 'custom', customLabel: '   ' })), {
       ok: false,
       failure: 'custom_label_empty',
@@ -326,12 +326,27 @@ test('one member starts a solo challenge owed to a cause and two to five start o
   }
 })
 
+test('saving the terms of a solo draft keeps its cause', async () => {
+  const db = openTestDatabase()
+  try {
+    const ada = await person(db, 'Ada')
+    const groupId = await groupWith(db, [ada], 'Alone', { cause: 'Food bank' })
+    assert.deepEqual(await saveChallenge(db, ada, groupId, terms({ stake: '7' })), { ok: true, name: 'No sweets' })
+    const saved = await challengeOf(db, groupId)
+    assert.equal(saved?.cause, 'Food bank')
+    assert.equal(saved?.stakeMinor, 700)
+    assert.equal(saved?.phase, 'draft')
+  } finally {
+    await closeDatabase(db)
+  }
+})
+
 test('only the creator saves the terms and starts the challenge', async () => {
   const db = openTestDatabase()
   try {
     const people = await Promise.all(['Ada', 'Grace'].map((name) => person(db, name)))
     const [ada, grace] = people as [Account, Account]
-    const groupId = await groupWith(db, people)
+    const groupId = await legacyGroupWith(db, people)
     assert.deepEqual(await saveChallenge(db, grace, groupId, terms()), { ok: false, failure: 'not_creator' })
     assert.equal(await challengeOf(db, groupId), null)
     assert.deepEqual(await saveChallenge(db, ada, groupId, terms()), { ok: true, name: 'No sweets' })
@@ -372,7 +387,7 @@ test('the start waits until every active member has a rhythm', async () => {
   try {
     const people = await Promise.all(['Ada', 'Grace', 'Lin'].map((name) => person(db, name)))
     const [ada, grace, lin] = people as [Account, Account, Account]
-    const groupId = await groupWith(db, people)
+    const groupId = await legacyGroupWith(db, people)
     assert.deepEqual(await saveRhythm(db, grace, groupId, { interval: 'every_day' }), { ok: false, failure: 'no_challenge' })
     assert.deepEqual(await saveChallenge(db, ada, groupId, terms()), { ok: true, name: 'No sweets' })
     const missing = async () => {
@@ -426,7 +441,7 @@ test('started terms stay put, a rhythm changes until the start, and a late joine
     assert.deepEqual(await saveRhythm(db, grace, groupId, { interval: 'every_2_days' }), { ok: true, rhythm: 'every_2_days' })
     assert.deepEqual(await saveRhythm(db, grace, groupId, { interval: 'every_day' }), { ok: false, failure: 'frozen' })
 
-    assert.deepEqual(await joinGroup(db, noor, groupId), { ok: true, groupId, label: 'Morning run' })
+    assert.deepEqual(await joinGroup(db, noor, groupId), { ok: true, groupId, label: 'No sweets' })
     assert.deepEqual(await saveRhythm(db, noor, groupId, { interval: 'every_3_days' }), { ok: true, rhythm: 'every_3_days' })
     assert.deepEqual(await saveRhythm(db, noor, groupId, { interval: 'every_day' }), { ok: false, failure: 'frozen' })
     const stored = await readGroup(db, groupId)
@@ -482,10 +497,7 @@ test('the group card saves the stake, starts with the people who are active, and
   const beaCookie = await cookieFor(db, bea)
   const { server, base } = await listen(db)
   try {
-    const created = await post(base, '/groups', adaCookie, 'name=Morning+run')
-    assert.equal(created.status, 303)
-    const groupPath = created.headers.get('location')
-    assert.ok(groupPath)
+    const groupPath = `/groups/${await legacyGroupWith(db, [ada])}`
     assert.equal(await challengeCount(db), 0)
 
     for (const path of [`${groupPath}/challenge`, `${groupPath}/challenge/start`, `${groupPath}/rhythm`]) {

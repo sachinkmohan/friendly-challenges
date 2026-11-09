@@ -3,11 +3,11 @@ import type { Server } from 'node:http'
 import { test } from 'node:test'
 import { upsertAccount } from '../src/accounts.ts'
 import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
-import { countDocs, readGroup, utcToday } from '../src/store.ts'
+import { countDocs, labelOf, readGroup, utcToday } from '../src/store.ts'
 import { createSession } from '../src/sessions.ts'
 import { saveChallenge, saveRhythm, startChallenge } from '../src/challenge.ts'
 import { joinGroup } from '../src/groups.ts'
-import { closeServer, cookieFor, fakeVerifier, googleToken, groupWith, listen, person } from './support/fixtures.ts'
+import { closeServer, cookieFor, createForm, fakeVerifier, googleToken, groupWith, listen, person } from './support/fixtures.ts'
 import { viewGroup } from './support/reads.ts'
 
 type Person = { cookie: string; userId: string }
@@ -60,10 +60,27 @@ test('the creator is the first member and a second person can join', async () =>
   const grace = await sessionFor(db, 'Grace', 'javascript:alert(1)')
   const { server, base } = await listen(db)
   try {
-    const created = await postForm(base, '/groups', ada.cookie, 'name=++Morning+run++')
+    const created = await postForm(base, '/groups', ada.cookie, createForm({ name: '  Morning run  ' }))
     assert.equal(created.status, 303)
     const groupPath = created.headers.get('location')
     assert.ok(groupPath)
+    const stored = await readGroup(db, groupPath.slice('/groups/'.length))
+    assert.ok(stored)
+    assert.equal(stored.name, null)
+    assert.equal(labelOf(stored), 'Morning run')
+    assert.equal(stored.createdBy, ada.userId)
+    assert.deepEqual(stored.challenge, {
+      name: 'Morning run',
+      typeKind: 'no_sugar',
+      customLabel: null,
+      currency: 'USD',
+      stakeMinor: 500,
+      startsOn: '2026-11-01',
+      endsOn: '2026-11-30',
+      cause: null,
+      phase: 'draft',
+    })
+    assert.deepEqual(stored.rhythms, { [ada.userId]: { kind: 'every_day' } })
     const roster = await fetch(`${base}${groupPath}`, { headers: { cookie: ada.cookie } })
     const rosterHtml = await roster.text()
     assert.match(rosterHtml, /Morning run/)
@@ -72,9 +89,9 @@ test('the creator is the first member and a second person can join', async () =>
     assert.match(rosterHtml, /https:\/\/lh3.googleusercontent.com\/a\/ada/)
     assert.match(rosterHtml, /<time datetime="\d{4}-\d{2}-\d{2}">/)
     assert.match(rosterHtml, /Before you start/)
-    assert.match(rosterHtml, /<li data-done="false">[^]*?Save the challenge name, type, stake, and dates\. <span class="sr-only">Not done yet\.<\/span>/)
-    assert.match(rosterHtml, /Start challenge appears here once every step above is done\./)
-    assert.doesNotMatch(rosterHtml, /challenge\/start/)
+    assert.match(rosterHtml, /<li data-done="true">[^]*?Save the challenge name, type, stake, and dates\. <span class="sr-only">Done\.<\/span>/)
+    assert.match(rosterHtml, /<li data-done="true">[^]*?Everyone picked a rhythm\./)
+    assert.match(rosterHtml, /<span class="rhythm">Every day<\/span>/)
     assert.match(rosterHtml, new RegExp(`${base}${groupPath}`))
     assert.doesNotMatch(rosterHtml, /left_on/)
 
@@ -82,7 +99,8 @@ test('the creator is the first member and a second person can join', async () =>
     const peekedHtml = await peeked.text()
     assert.match(peekedHtml, /1 active/)
     assert.doesNotMatch(peekedHtml, /Ada/)
-    assert.doesNotMatch(peekedHtml, /<time /)
+    assert.doesNotMatch(peekedHtml, /class="members"/)
+    assert.match(peekedHtml, /5\.00 USD/)
     assert.match(peekedHtml, /Join group/)
 
     const before = await countRows(db, 'memberships')
@@ -104,7 +122,7 @@ test('the creator is the first member and a second person can join', async () =>
     assert.match(both, /Grace/)
     assert.doesNotMatch(both, /javascript:alert/)
 
-    const second = await postForm(base, '/groups', ada.cookie, 'name=Evening+run')
+    const second = await postForm(base, '/groups', ada.cookie, createForm({ name: 'Evening run' }))
     assert.equal(second.status, 303)
     const home = await (await fetch(base, { headers: { cookie: ada.cookie } })).text()
     assert.match(home, /Morning run/)
@@ -122,7 +140,7 @@ test('a sixth active member is rejected by the database', async () => {
   const people = await Promise.all([0, 1, 2, 3, 4, 5].map((n) => sessionFor(db, `Person ${n}`)))
   const { server, base } = await listen(db)
   try {
-    const created = await postForm(base, '/groups', people[0].cookie, 'name=Full')
+    const created = await postForm(base, '/groups', people[0].cookie, createForm({ name: 'Full' }))
     const groupPath = created.headers.get('location')
     assert.ok(groupPath)
     for (const person of people.slice(1, 5)) {
@@ -159,7 +177,7 @@ test('six people joining at once leave five active members', async () => {
   const people = await Promise.all([0, 1, 2, 3, 4, 5].map((n) => sessionFor(db, `Racer ${n}`)))
   const { server, base } = await listen(db)
   try {
-    const created = await postForm(base, '/groups', people[0].cookie, 'name=Race')
+    const created = await postForm(base, '/groups', people[0].cookie, createForm({ name: 'Race' }))
     const groupPath = created.headers.get('location')
     assert.ok(groupPath)
     const joins = await Promise.all(people.slice(1).map((person) => postForm(base, `${groupPath}/join`, person.cookie)))
@@ -174,28 +192,63 @@ test('six people joining at once leave five active members', async () => {
   }
 })
 
-test('a blank or oversized name does not create a group', async () => {
+test('a bad field re-draws the create form with what was typed and creates nothing', async () => {
   const db = openTestDatabase()
   const ada = await sessionFor(db, 'Ada')
   const { server, base } = await listen(db)
+  const create = (fields: Record<string, string>) => postForm(base, '/groups', ada.cookie, createForm(fields))
   try {
-    const blank = await postForm(base, '/groups', ada.cookie, 'name=+++')
+    const form = await fetch(`${base}/groups/new`, { headers: { cookie: ada.cookie } })
+    assert.equal(form.status, 200)
+    const formHtml = await form.text()
+    assert.match(formHtml, /<form method="post" action="\/groups">/)
+    for (const field of ['name', 'type', 'custom_label', 'currency', 'stake', 'starts_on', 'ends_on', 'interval', 'solo', 'cause']) {
+      assert.match(formHtml, new RegExp(`name="${field}"`))
+    }
+    assert.doesNotMatch(formHtml, /id="challenge-solo"[^>]*checked/)
+
+    const blank = await create({ name: '   ', stake: '9.9', custom_label: 'Laps', solo: 'yes', cause: 'Food bank' })
     assert.equal(blank.status, 400)
-    assert.match(await blank.text(), /Type a group name/)
-    const longName = 'a'.repeat(41)
-    const long = await postForm(base, '/groups', ada.cookie, `name=${longName}`)
-    assert.equal(long.status, 400)
-    assert.match(await long.text(), /40 characters or fewer/)
-    const ok = await postForm(base, '/groups', ada.cookie, `name=${'b'.repeat(40)}`)
-    assert.equal(ok.status, 303)
-    assert.equal(await countRows(db, 'groups'), 1)
-    const emoji = '😀'.repeat(40)
-    const emojiGroup = await postForm(base, '/groups', ada.cookie, `name=${encodeURIComponent(emoji)}`)
-    assert.equal(emojiGroup.status, 303)
-    const tooManyEmoji = await postForm(base, '/groups', ada.cookie, `name=${encodeURIComponent('😀'.repeat(41))}`)
-    assert.equal(tooManyEmoji.status, 400)
-    assert.match(await tooManyEmoji.text(), /40 characters or fewer/)
+    const blankHtml = await blank.text()
+    assert.match(blankHtml, /Type a challenge name\./)
+    assert.match(blankHtml, /name="stake" value="9\.9"/)
+    assert.match(blankHtml, /name="custom_label" value="Laps"/)
+    assert.match(blankHtml, /name="cause" value="Food bank"/)
+    assert.match(blankHtml, /id="challenge-solo" name="solo" value="yes" checked/)
+    assert.match(blankHtml, /<option value="every_day" selected>/)
+
+    assert.match(await (await create({ name: 'a'.repeat(41) })).text(), /40 characters or fewer/)
+    assert.match(await (await create({ name: '😀'.repeat(41) })).text(), /40 characters or fewer/)
+    assert.match(await (await create({ stake: '0' })).text(), /Type a stake above zero\./)
+    const weekly = await create({ interval: 'weekly' })
+    assert.equal(weekly.status, 400)
+    assert.match(await weekly.text(), /Pick how often you log\./)
+    const noCause = await create({ solo: 'yes', cause: '  ' })
+    assert.equal(noCause.status, 400)
+    assert.match(await noCause.text(), /Type who your missed days are owed to\./)
+    assert.match(await (await create({ solo: 'yes', cause: 'c'.repeat(41) })).text(), /40 characters or fewer/)
+    assert.equal(await countRows(db, 'groups'), 0)
+
+    assert.equal((await create({ name: 'b'.repeat(40) })).status, 303)
+    assert.equal((await create({ name: '😀'.repeat(40) })).status, 303)
     assert.equal(await countRows(db, 'groups'), 2)
+  } finally {
+    await close(server, db)
+  }
+})
+
+test('Solo stores the cause on the draft, and a cause typed with Solo off is dropped', async () => {
+  const db = openTestDatabase()
+  const ada = await sessionFor(db, 'Ada')
+  const { server, base } = await listen(db)
+  const causeOf = async (response: Response) => {
+    assert.equal(response.status, 303)
+    const group = await readGroup(db, (response.headers.get('location') ?? '').slice('/groups/'.length))
+    return group?.challenge?.cause
+  }
+  try {
+    assert.equal(await causeOf(await postForm(base, '/groups', ada.cookie, createForm({ solo: 'yes', cause: '  Food bank  ' }))), 'Food bank')
+    assert.equal(await causeOf(await postForm(base, '/groups', ada.cookie, createForm({ cause: 'Food bank' }))), null)
   } finally {
     await close(server, db)
   }
@@ -206,14 +259,14 @@ test('a signed-out person cannot create or join', async () => {
   const ada = await sessionFor(db, 'Ada')
   const { server, base } = await listen(db)
   try {
-    const created = await postForm(base, '/groups', ada.cookie, 'name=Morning+run')
+    const created = await postForm(base, '/groups', ada.cookie, createForm())
     const groupPath = created.headers.get('location')
     assert.ok(groupPath)
     const beforeGroups = await countRows(db, 'groups')
     const beforeMembers = await countRows(db, 'memberships')
-    const create = await postForm(base, '/groups', null, 'name=Sneaky')
+    const create = await postForm(base, '/groups', null, createForm({ name: 'Sneaky' }))
     assert.equal(create.status, 401)
-    assert.match(await create.text(), /Sign in to create a group/)
+    assert.match(await create.text(), /Sign in to create a challenge/)
     const join = await postForm(base, `${groupPath}/join`, null)
     assert.equal(join.status, 401)
     const joinHtml = await join.text()
@@ -252,7 +305,7 @@ test('a signed-out join link comes back to the same group after Google', async (
   const signIn = (returnPath: string) =>
     postForm(base, '/auth/firebase', null, new URLSearchParams({ idToken: 'grace-token', return: returnPath }).toString())
   try {
-    const created = await postForm(base, '/groups', ada.cookie, 'name=Morning+run')
+    const created = await postForm(base, '/groups', ada.cookie, createForm())
     const groupPath = created.headers.get('location')
     assert.ok(groupPath)
     const before = await countRows(db, 'memberships')
@@ -294,20 +347,20 @@ test('nobody joins a solo challenge once it has started, and a group challenge s
     assert.deepEqual(await startChallenge(db, ada, solo, { cause: 'Food bank' }), { ok: true, name: 'No sweets' })
     assert.deepEqual(await joinGroup(db, grace, solo), { ok: false, failure: 'solo_started' })
     assert.deepEqual(Object.keys((await readGroup(db, solo))?.members ?? {}), [ada.id])
-    assert.deepEqual(await joinGroup(db, ada, solo), { ok: true, groupId: solo, label: 'Alone' })
+    assert.deepEqual(await joinGroup(db, ada, solo), { ok: true, groupId: solo, label: 'No sweets' })
     assert.equal((await viewGroup(db, grace, solo)).kind, 'solo')
     assert.equal((await viewGroup(db, null, solo)).kind, 'solo')
     assert.equal((await viewGroup(db, ada, solo)).kind, 'members')
 
     const draft = await groupWith(db, [ada], 'Not yet')
     assert.deepEqual(await saveChallenge(db, ada, draft, soloTerms), { ok: true, name: 'No sweets' })
-    assert.deepEqual(await joinGroup(db, grace, draft), { ok: true, groupId: draft, label: 'Not yet' })
+    assert.deepEqual(await joinGroup(db, grace, draft), { ok: true, groupId: draft, label: 'No sweets' })
 
     const group = await groupWith(db, [ada, grace, lin], 'Group')
     assert.deepEqual(await saveChallenge(db, ada, group, soloTerms), { ok: true, name: 'No sweets' })
     for (const who of [ada, grace, lin]) assert.deepEqual(await saveRhythm(db, who, group, { interval: 'every_day' }), { ok: true, rhythm: 'every_day' })
     assert.deepEqual(await startChallenge(db, ada, group, { cause: '' }), { ok: true, name: 'No sweets' })
-    assert.deepEqual(await joinGroup(db, noor, group), { ok: true, groupId: group, label: 'Group' })
+    assert.deepEqual(await joinGroup(db, noor, group), { ok: true, groupId: group, label: 'No sweets' })
   } finally {
     await closeDatabase(db)
   }

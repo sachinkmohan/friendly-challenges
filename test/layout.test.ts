@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { parseGroupId } from '../src/groups.ts'
-import { renderGroup, renderHome, renderMessage, renderNewGroup } from '../src/page.ts'
+import { renderGroup, renderHome, renderMessage, renderNewChallenge } from '../src/page.ts'
 
 const account = {
   id: '1',
@@ -24,8 +24,8 @@ test('every page is the same phone shell, full screen on a phone', () => {
   const pages = [
     renderHome(signedOut),
     renderHome({ state: 'signed_in', account, groups: [], heatmaps: [] }),
-    renderNewGroup(signedOut),
-    renderNewGroup({ state: 'signed_in', account }),
+    renderNewChallenge(signedOut),
+    renderNewChallenge({ state: 'signed_in', account }),
     renderGroup(
       { kind: 'preview', groupId, label: 'Morning run', activeCount: 1, headline: null },
       signedOut,

@@ -4,7 +4,7 @@ import { parseIsoDate, saveChallenge, saveRhythm, startChallenge, type IsoDate }
 import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
 import { parseGroupId, type GroupId } from '../src/groups.ts'
 import type { Account } from '../src/identity.ts'
-import { closeServer, cookieFor, groupWith, listen, person, post, setJoinedOn } from './support/fixtures.ts'
+import { closeServer, cookieFor, createForm, groupWith, listen, person, post, setJoinedOn } from './support/fixtures.ts'
 
 type Crew = { db: Database; ada: Account; grace: Account; lin: Account; groupId: GroupId }
 
@@ -171,7 +171,7 @@ test('leaving lands on home with the last day, and the creator recording someone
     const left = await post(base, dropoutPath, linCookie, fields({ member: lin.id, last_day: '2026-11-05' }))
     assert.equal(left.status, 303)
     assert.equal(left.headers.get('location'), '/')
-    assert.equal(toastShown(await (await land(base, left, linCookie)).text()), 'You left Morning run. Your last day is Thu 5 Nov.')
+    assert.equal(toastShown(await (await land(base, left, linCookie)).text()), 'You left No sweets. Your last day is Thu 5 Nov.')
 
     const dropped = await post(base, dropoutPath, adaCookie, fields({ member: grace.id, last_day: '2026-11-05' }))
     assert.equal(dropped.status, 303)
@@ -191,7 +191,7 @@ test('deleting a group shows the toast on home', async () => {
     const deleted = await post(base, `/groups/${groupId}/delete`, adaCookie, 'confirm=yes')
     assert.equal(deleted.status, 303)
     assert.equal(deleted.headers.get('location'), '/')
-    assert.equal(toastShown(await (await land(base, deleted, adaCookie)).text()), 'Deleted Morning run.')
+    assert.equal(toastShown(await (await land(base, deleted, adaCookie)).text()), 'Deleted No sweets.')
   } finally {
     await closeServer(server)
     await closeDatabase(db)
@@ -208,7 +208,7 @@ test('creating, joining, saving terms, picking a rhythm and starting each confir
   const linCookie = await cookieFor(db, lin)
   const { server, base } = await listen(db, { today })
   try {
-    const created = await post(base, '/groups', adaCookie, fields({ name: 'Evening swim' }))
+    const created = await post(base, '/groups', adaCookie, createForm({ name: 'Evening swim' }))
     assert.equal(created.status, 303)
     assert.equal(toastShown(await (await land(base, created, adaCookie)).text()), 'Created Evening swim.')
     const groupPath = created.headers.get('location') ?? ''

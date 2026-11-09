@@ -1,4 +1,3 @@
-import { stakesGoFrom } from './challenge.ts'
 import type { Database } from './db.ts'
 import { ACTIVE_MEMBER_CAP, activeMemberIds, compare, groupRef, labelOf, memberOf, parseGroup, readGroup, utcToday, type GroupDoc, type UserDoc } from './store.ts'
 import type { Account } from './identity.ts'
@@ -6,16 +5,11 @@ import type { Account } from './identity.ts'
 export type GroupId = string & { readonly brand: 'GroupId' }
 
 const GROUP_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-const NAME_MAX = 40
 
 export function parseGroupId(raw: string): GroupId | null {
   if (!GROUP_ID.test(raw)) return null
   return raw as GroupId
 }
-
-export type CreateGroupResult =
-  | { ok: true; groupId: GroupId; name: string }
-  | { ok: false; failure: 'name_empty' | 'name_too_long' }
 
 type JoinFailure = 'group_missing' | 'group_full' | 'solo_started'
 
@@ -50,25 +44,14 @@ export type HomeGroup = {
   activeCount: number
 }
 
-function codePointLength(value: string): number {
-  return Array.from(value).length
-}
-
-function nameFailure(name: string): 'name_empty' | 'name_too_long' | null {
-  const length = codePointLength(name)
-  if (length === 0) return 'name_empty'
-  if (length > NAME_MAX) return 'name_too_long'
-  return null
-}
-
-function newGroupId(): GroupId {
+export function newGroupId(): GroupId {
   const id = parseGroupId(crypto.randomUUID())
   if (!id) throw new Error('group id')
   return id
 }
 
 function isStartedSolo(group: GroupDoc): boolean {
-  return stakesGoFrom(group.challenge)?.kind === 'cause'
+  return group.challenge?.phase === 'active' && group.challenge.cause !== null
 }
 
 export type DeleteFailure = 'group_missing' | 'not_member' | 'not_creator' | 'not_confirmed'
@@ -89,27 +72,6 @@ class JoinRejected extends Error {
     super(failure)
     this.failure = failure
   }
-}
-
-export async function createGroup(
-  db: Database,
-  account: Account,
-  rawName: string,
-): Promise<CreateGroupResult> {
-  const name = rawName.trim()
-  const failure = nameFailure(name)
-  if (failure) return { ok: false, failure }
-  const groupId = newGroupId()
-  const group: GroupDoc = {
-    name,
-    createdBy: account.id,
-    memberIds: [account.id],
-    members: { [account.id]: { joinedOn: utcToday(), leftOn: null } },
-    challenge: null,
-    rhythms: {},
-  }
-  await groupRef(db, groupId).create(group)
-  return { ok: true, groupId, name }
 }
 
 export async function joinGroup(db: Database, account: Account, groupId: GroupId): Promise<JoinResult> {

@@ -19,6 +19,8 @@ import {
   type ChallengeInput,
   type ChallengeTerms,
   type ChallengeType,
+  type CreateChallengeInput,
+  type CreateChallengeResult,
   type MemberChallengeCard,
   type Rhythm,
   type RhythmInput,
@@ -27,6 +29,7 @@ import {
   type StartKind,
   type StartStep,
 } from './challenge.ts'
+import { CURRENCY_CODES } from './currencies.ts'
 import { DAY_MARK_LABELS, type GroupCalendar, type Heatmap, type MarkedDay } from './calendar.ts'
 import { dropoutFailureCopy, type DropoutFailure, type DropoutInput } from './dropouts.ts'
 import { CHECK_IN_LABELS, checkInFailureCopy, type CheckIn, type CheckInFailure } from './checkins.ts'
@@ -775,30 +778,7 @@ function groupCard(body: string, toast: string | null = null): string {
   return frame(screens, tabBar('/', '/#account'), toast)
 }
 
-export function renderNewGroup(viewer: Viewer, error?: 'name_empty' | 'name_too_long'): string {
-  if (viewer.state === 'signed_out') {
-    return groupCard(`
-      <h2>Create a group</h2>
-      <p>Sign in to create a group.</p>
-      ${signInControl(viewer, `${groupsRoot}/new`)}
-    `)
-  }
-  const message =
-    error === 'name_empty'
-      ? '<p>Type a group name.</p>'
-      : error === 'name_too_long'
-        ? '<p>Use 40 characters or fewer.</p>'
-        : ''
-  return groupCard(`
-    <h2>Create a group</h2>
-    ${message}
-    <form method="post" action="${groupsRoot}">
-      <label for="group-name">Group name</label>
-      <input id="group-name" name="name" autocomplete="off" required>
-      <button type="submit">Create group</button>
-    </form>
-  `)
-}
+type CreateChallengeFailure = Extract<CreateChallengeResult, { ok: false }>['failure']
 
 type TermValues = {
   name: string
@@ -926,10 +906,8 @@ function termsText(terms: ChallengeTerms, minorDigits: number, stakesGo: StakesG
     ${stakesGoText(stakesGo)}`
 }
 
-function termsForm(groupId: GroupId, currencies: readonly string[], values: TermValues): string {
-  const action = escapeHtml(`${groupHref(groupId)}/challenge`)
-  return `<form method="post" action="${action}">
-      <label for="challenge-name">Challenge name</label>
+function termsFields(currencies: readonly string[], values: TermValues): string {
+  return `<label for="challenge-name">Challenge name</label>
       <input id="challenge-name" name="name" value="${escapeHtml(values.name)}" autocomplete="off">
       <label for="challenge-type">Type</label>
       <select id="challenge-type" name="type">${typeOptions(values.type)}</select>
@@ -942,9 +920,55 @@ function termsForm(groupId: GroupId, currencies: readonly string[], values: Term
       <label for="challenge-start">Start date</label>
       <input id="challenge-start" name="starts_on" type="date" value="${escapeHtml(values.startsOn)}">
       <label for="challenge-end">End date</label>
-      <input id="challenge-end" name="ends_on" type="date" value="${escapeHtml(values.endsOn)}">
+      <input id="challenge-end" name="ends_on" type="date" value="${escapeHtml(values.endsOn)}">`
+}
+
+function termsForm(groupId: GroupId, currencies: readonly string[], values: TermValues): string {
+  const action = escapeHtml(`${groupHref(groupId)}/challenge`)
+  return `<form method="post" action="${action}">
+      ${termsFields(currencies, values)}
       <button type="submit">Save challenge</button>
     </form>`
+}
+
+export function renderNewChallenge(viewer: Viewer, failure?: CreateChallengeFailure, draft?: CreateChallengeInput): string {
+  if (viewer.state === 'signed_out') {
+    return groupCard(`
+      <h2>Create a challenge</h2>
+      <p>Sign in to create a challenge.</p>
+      ${signInControl(viewer, `${groupsRoot}/new`)}
+    `)
+  }
+  const message = failure ? `<p class="start-error" role="alert">${escapeHtml(challengeFailureCopy[failure])}</p>` : ''
+  const values = draft ? termsFromDraft(draft) : emptyTerms
+  const solo = draft?.solo ? ' checked' : ''
+  return groupCard(`
+    <h2>Create a challenge</h2>
+    <p>Set the terms and how often you log. Invite friends from the challenge page, or make it solo.</p>
+    ${message}
+    <form method="post" action="${groupsRoot}">
+      ${termsFields(CURRENCY_CODES, values)}
+      <label for="rhythm-interval">How often you log</label>
+      <select id="rhythm-interval" name="interval">${intervalOptions(draft?.interval ?? '')}</select>
+      <label class="confirm"><input type="checkbox" id="challenge-solo" name="solo" value="yes"${solo}> Solo: just me, nobody can join</label>
+      <div id="cause-field">
+        <label for="challenge-cause">Who your missed days are owed to</label>
+        <input id="challenge-cause" name="cause" value="${escapeHtml(draft?.cause ?? '')}" autocomplete="off">
+        <p class="field-hint">Only for a solo challenge. You pay this cause yourself, outside the app.</p>
+      </div>
+      <button type="submit">Create challenge</button>
+    </form>
+    <script>
+      (function () {
+        var solo = document.getElementById('challenge-solo')
+        var cause = document.getElementById('cause-field')
+        if (!solo || !cause) return
+        var sync = function () { cause.hidden = !solo.checked }
+        solo.addEventListener('change', sync)
+        sync()
+      })()
+    </script>
+  `)
 }
 
 function rhythmText(rhythm: Rhythm): string {

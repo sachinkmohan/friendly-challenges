@@ -1,7 +1,7 @@
 import { CURRENCY_CODES, minorDigitsOf } from './currencies.ts'
 import type { Database } from './db.ts'
 import type { Account } from './identity.ts'
-import type { GroupId } from './groups.ts'
+import { newGroupId, type GroupId } from './groups.ts'
 import {
   ACTIVE_MEMBER_CAP,
   activeMemberIds,
@@ -10,6 +10,7 @@ import {
   memberOf,
   readGroup,
   rhythmOf,
+  utcToday,
   type ChallengeDoc,
   type GroupDoc,
   type MemberDoc,
@@ -82,6 +83,12 @@ export type ChallengeInput = {
 export type RhythmInput = {
   readonly interval: string
 }
+
+export type CreateChallengeInput = ChallengeInput &
+  RhythmInput & {
+    readonly solo: boolean
+    readonly cause: string
+  }
 
 export type Rhythm = {
   readonly kind: RhythmKind
@@ -197,6 +204,10 @@ export const challengeFailureCopy = {
   rhythms_missing: 'Everyone needs to pick a rhythm before the challenge starts.',
   bad_interval: 'Pick how often you log.',
 } as const satisfies Record<ChallengeFailure, string>
+
+export type CreateChallengeResult =
+  | { readonly ok: true; readonly groupId: GroupId; readonly label: string }
+  | { readonly ok: false; readonly failure: TermsFailure | 'bad_interval' | 'cause_empty' | 'cause_too_long' }
 
 export type SaveChallengeResult =
   | { readonly ok: true; readonly name: string }
@@ -503,7 +514,7 @@ function startChecks(group: GroupDoc): readonly StartCheck[] {
   ]
 }
 
-function draftDoc(terms: ChallengeTerms): ChallengeDoc {
+function draftDoc(terms: ChallengeTerms, cause: string | null): ChallengeDoc {
   return {
     name: terms.name,
     typeKind: terms.type.kind === 'custom' ? 'custom' : terms.type.preset,
@@ -512,7 +523,7 @@ function draftDoc(terms: ChallengeTerms): ChallengeDoc {
     stakeMinor: terms.stakeMinor,
     startsOn: terms.startsOn,
     endsOn: terms.endsOn,
-    cause: null,
+    cause,
     phase: 'draft',
   }
 }
@@ -576,36 +587,65 @@ async function changeGroup<R extends { readonly ok: boolean }>(
   }
 }
 
-export async function saveChallenge(
-  db: Database,
-  account: Account,
-  groupId: GroupId,
-  input: ChallengeInput,
-): Promise<SaveChallengeResult> {
+function termsFrom(input: ChallengeInput): { ok: true; terms: ChallengeTerms } | { ok: false; failure: TermsFailure } {
   const parsed = parseChallengeInput(input)
   if (!parsed.ok) return parsed
-  const changed = await changeGroup<SaveChallengeResult>(db, account, groupId, (group) => {
-    requireCreator(group, account)
-    const minorDigits = minorDigitsOf(parsed.value.currency)
-    if (minorDigits === null) throw new CommandError('bad_currency')
-    const scaled = scaleStake(parsed.value.stake, minorDigits)
-    if (!scaled.ok) throw new CommandError(scaled.failure)
-    const terms: ChallengeTerms = {
+  const minorDigits = minorDigitsOf(parsed.value.currency)
+  if (minorDigits === null) return { ok: false, failure: 'bad_currency' }
+  const scaled = scaleStake(parsed.value.stake, minorDigits)
+  if (!scaled.ok) return scaled
+  return {
+    ok: true,
+    terms: {
       name: parsed.value.name,
       type: parsed.value.type,
       currency: parsed.value.currency as CurrencyCode,
       stakeMinor: scaled.stakeMinor,
       startsOn: parsed.value.startsOn,
       endsOn: parsed.value.endsOn,
-    }
+    },
+  }
+}
+
+// A cause typed while Solo is off is dropped, so a challenge for friends never carries one.
+export async function createChallenge(db: Database, account: Account, input: CreateChallengeInput): Promise<CreateChallengeResult> {
+  const terms = termsFrom(input)
+  if (!terms.ok) return terms
+  if (!isRhythmKind(input.interval)) return { ok: false, failure: 'bad_interval' }
+  const cause = input.solo ? parseCause(input.cause) : null
+  if (cause && !cause.ok) return cause
+  const groupId = newGroupId()
+  const group: GroupDoc = {
+    name: null,
+    createdBy: account.id,
+    memberIds: [account.id],
+    members: { [account.id]: { joinedOn: utcToday(), leftOn: null } },
+    challenge: draftDoc(terms.terms, cause ? cause.name : null),
+    rhythms: { [account.id]: { kind: input.interval } },
+  }
+  await groupRef(db, groupId).create(group)
+  return { ok: true, groupId, label: terms.terms.name }
+}
+
+export async function saveChallenge(
+  db: Database,
+  account: Account,
+  groupId: GroupId,
+  input: ChallengeInput,
+): Promise<SaveChallengeResult> {
+  const parsed = termsFrom(input)
+  if (!parsed.ok) return parsed
+  const terms = parsed.terms
+  const changed = await changeGroup<SaveChallengeResult>(db, account, groupId, (group) => {
+    requireCreator(group, account)
     const existing = group.challenge ? storedFrom(group.challenge) : null
     if (existing?.phase === 'active') {
       if (sameTerms(existing.terms, terms)) return null
       throw new CommandError('frozen')
     }
-    return { challenge: draftDoc(terms) }
+    return { challenge: draftDoc(terms, group.challenge?.cause ?? null) }
   })
-  return changed.ok ? { ok: true, name: parsed.value.name } : changed
+  return changed.ok ? { ok: true, name: terms.name } : changed
 }
 
 export async function startChallenge(
