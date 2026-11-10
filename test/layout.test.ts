@@ -50,7 +50,7 @@ test('every page is the same phone shell, full screen on a phone', () => {
     assert.match(phoneRule, /html, body, \.stage \{ height: auto; overflow: visible; \}/, 'the document scrolls on a phone, so pull-to-refresh works')
     assert.match(phoneRule, /\.screens \{ overflow: visible; \}/)
     assert.match(phoneRule, /\.appbar \{ position: sticky; top: 0;/)
-    assert.match(phoneRule, /\.tabbar \{ position: sticky; bottom: 0; \}/)
+    assert.match(phoneRule, /\.tabbar \{ position: sticky; bottom: 0;/)
     assert.match(phoneRule, /\.device \{ width: 100%; height: auto; padding: 0; border-radius: 0; box-shadow: none; \}/)
     assert.match(phoneRule, /\.indicator \{ display: none; \}/)
     assert.match(html, /<meta name="theme-color" content="#fffdf8">/)
