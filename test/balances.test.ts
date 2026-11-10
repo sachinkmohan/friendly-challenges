@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { Timestamp } from 'firebase-admin/firestore'
 import { test } from 'node:test'
-import { missedDayDebts, recordPayment, settle, soloDue, type GroupLedger, type SoloLedger } from '../src/balances.ts'
+import { missedDayDebts, recordPayment, settle, soloDue, standingsFrom, type GroupLedger, type SoloLedger, type Standing } from '../src/balances.ts'
 import { buildCalendar, type CalendarMember } from '../src/calendar.ts'
 import { parseIsoDate, saveChallenge, saveRhythm, startChallenge, type IsoDate } from '../src/challenge.ts'
 import { logCheckIn } from '../src/checkins.ts'
@@ -475,4 +475,42 @@ test('the solo card shows what the member owes the cause and a payment to it wit
     await closeServer(server)
     await closeDatabase(db)
   }
+})
+
+function standings(nets: Record<string, number>): Record<string, Standing> {
+  const lines = Object.entries(nets).map(([userId, netMinor]) => ({ userId, netMinor }))
+  return Object.fromEntries(standingsFrom(lines))
+}
+
+test('the largest standing draws five bags and the rest scale against it', () => {
+  assert.deepEqual(standings({ ada: 1000, grace: -600, lin: -400 }), {
+    ada: { kind: 'ahead', bags: 5 },
+    grace: { kind: 'behind', bags: 3 },
+    lin: { kind: 'behind', bags: 2 },
+  })
+})
+
+test('a small standing still draws one bag and a near-max one draws four', () => {
+  assert.deepEqual(standings({ ada: 1000, grace: -10, lin: -990 }), {
+    ada: { kind: 'ahead', bags: 5 },
+    grace: { kind: 'behind', bags: 1 },
+    lin: { kind: 'behind', bags: 4 },
+  })
+})
+
+test('a standing of zero is even, and all zero is all even', () => {
+  assert.deepEqual(standings({ ada: 500, grace: 0, lin: -500 }), {
+    ada: { kind: 'ahead', bags: 5 },
+    grace: { kind: 'even' },
+    lin: { kind: 'behind', bags: 5 },
+  })
+  assert.deepEqual(standings({ ada: 0, grace: 0 }), { ada: { kind: 'even' }, grace: { kind: 'even' } })
+})
+
+test('the member furthest behind sets the scale when nobody is as far ahead', () => {
+  assert.deepEqual(standings({ ada: 250, grace: 750, lin: -1000 }), {
+    ada: { kind: 'ahead', bags: 1 },
+    grace: { kind: 'ahead', bags: 4 },
+    lin: { kind: 'behind', bags: 5 },
+  })
 })

@@ -168,7 +168,7 @@ export function missedDayDebts(
   return calendarDebts(buildCalendar(span, members), stakeMinor, members)
 }
 
-function calendarDebts(
+export function calendarDebts(
   calendar: GroupCalendar,
   stakeMinor: number,
   members: readonly CalendarMember[],
@@ -248,6 +248,25 @@ export function settle(
   }
 }
 
+export type Bags = 1 | 2 | 3 | 4 | 5
+
+export type Standing = { readonly kind: 'even' } | { readonly kind: 'ahead'; readonly bags: Bags } | { readonly kind: 'behind'; readonly bags: Bags }
+
+const MAX_BAGS = 5
+
+// Bags only compare members within one challenge, so the largest standing always draws the full five.
+export function standingsFrom(nets: readonly { readonly userId: string; readonly netMinor: number }[]): ReadonlyMap<string, Standing> {
+  const max = nets.reduce((top, line) => Math.max(top, Math.abs(line.netMinor)), 0)
+  return new Map(
+    nets.map((line): [string, Standing] => {
+      const size = Math.abs(line.netMinor)
+      if (size === 0) return [line.userId, { kind: 'even' }]
+      const bags = (size === max ? MAX_BAGS : Math.min(MAX_BAGS - 1, Math.max(1, Math.round((MAX_BAGS * size) / max)))) as Bags
+      return [line.userId, { kind: line.netMinor > 0 ? 'ahead' : 'behind', bags }]
+    }),
+  )
+}
+
 class PaymentRejected extends Error {
   readonly failure: PaymentFailure
 
@@ -288,7 +307,7 @@ function dateFrom(value: string): IsoDate {
   return parsed
 }
 
-function membersFrom(
+export function membersFrom(
   group: GroupDoc,
   checkIns: readonly CheckInDoc[],
   users: ReadonlyMap<string, UserDoc>,
