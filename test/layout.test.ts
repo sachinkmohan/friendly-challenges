@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { parseGroupId } from '../src/groups.ts'
-import { renderGroup, renderHome, renderMessage, renderNewChallenge } from '../src/page.ts'
+import { renderBadge, renderGroup, renderHome, renderMessage, renderNewChallenge } from '../src/page.ts'
 
 const account = {
   id: '1',
@@ -32,6 +32,8 @@ test('every page is the same phone shell, full screen on a phone', () => {
       'http://127.0.0.1:3000',
     ),
     renderMessage('Not found', 'That page does not exist.'),
+    renderBadge(signedOut),
+    renderBadge({ state: 'signed_in', badge: { kind: 'initials', initials: 'AD' }, initials: 'AD' }),
   ]
   for (const html of pages) {
     assert.match(html, /class="device"/)
