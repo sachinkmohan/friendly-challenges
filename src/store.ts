@@ -1,4 +1,5 @@
 import { Timestamp, type DocumentReference, type DocumentSnapshot, type Transaction } from 'firebase-admin/firestore'
+import { parseBadgeEmoji, type BadgeEmoji } from './badges.ts'
 import type { Database } from './db.ts'
 import type { GroupId } from './groups.ts'
 
@@ -18,6 +19,7 @@ export type UserDoc = {
   readonly email: string
   readonly displayName: string
   readonly avatarUrl: string | null
+  readonly badgeEmoji: BadgeEmoji | null
 }
 
 export type MemberDoc = {
@@ -179,6 +181,7 @@ export function parseUser(raw: unknown): UserDoc {
     email: text(row.email, 'user email'),
     displayName: text(row.displayName, 'user name'),
     avatarUrl: nullable(row.avatarUrl, (v) => text(v, 'user avatar')),
+    badgeEmoji: parseBadgeEmoji(row.badgeEmoji),
   }
 }
 
