@@ -1,19 +1,15 @@
-import type { Database } from './db.ts'
+import type { Badge } from './badges.ts'
+import type { Standing } from './balances.ts'
 import {
   memberIsDue,
   parseIsoDate,
-  rhythmFrom,
-  spanFrom,
-  windowFrom,
   type ChallengeWindow,
   type IsoDate,
   type MembershipSpan,
   type Rhythm,
 } from './challenge.ts'
-import { isColor, type CheckInColor } from './checkins.ts'
-import { parseGroupId, type GroupId } from './groups.ts'
-import type { Account } from './identity.ts'
-import { compare, labelOf, memberOf, parseCheckIn, parseGroup, rhythmOf } from './store.ts'
+import type { CheckInColor } from './checkins.ts'
+import type { GroupId } from './groups.ts'
 
 export const DAY_MARK_LABELS = {
   green: 'Kept it',
@@ -40,11 +36,22 @@ export type GroupCalendar = {
 
 export type HeatmapWeek = readonly (MarkedDay | null)[]
 
+// standing is null until the challenge's first day.
+export type RowMember = {
+  readonly userId: string
+  readonly firstName: string
+  readonly badge: Badge
+  readonly isViewer: boolean
+  readonly standing: Standing | null
+}
+
+// members is null for a solo challenge, whose stakes go to a cause.
 export type Heatmap = {
   readonly groupId: GroupId
   readonly name: string
   readonly startsOn: IsoDate
   readonly weeks: readonly HeatmapWeek[]
+  readonly members: readonly RowMember[] | null
 }
 
 export type CalendarSpan = {
@@ -141,32 +148,4 @@ export function weeksOf(days: readonly MarkedDay[]): readonly HeatmapWeek[] {
   }
   if (week.length > 0) weeks.push([...week, ...Array.from({ length: 7 - week.length }, () => null)])
   return weeks
-}
-
-export async function listHeatmaps(db: Database, account: Account, today: IsoDate): Promise<readonly Heatmap[]> {
-  const snapshot = await db.collection('groups').where('memberIds', 'array-contains', account.id).get()
-  const heatmaps = await Promise.all(
-    snapshot.docs.map(async (doc): Promise<Heatmap | null> => {
-      const group = parseGroup(doc.data())
-      const span = spanFrom(memberOf(group, account.id))
-      const window = windowFrom(group.challenge)
-      if (!span || span.leftOn !== null || window?.phase !== 'active') return null
-      const groupId = parseGroupId(doc.id)
-      if (!groupId) throw new Error('heatmap group')
-      const mine = await doc.ref.collection('checkIns').where('userId', '==', account.id).get()
-      const colors = new Map<IsoDate, CheckInColor>()
-      for (const item of mine.docs.map((row) => parseCheckIn(row.data()))) {
-        const day = parseIsoDate(item.day)
-        if (!day || !isColor(item.color)) throw new Error('check-in')
-        colors.set(day, item.color)
-      }
-      const calendar = buildCalendar({ window, today }, [
-        { userId: account.id, displayName: account.displayName, span, rhythm: rhythmFrom(rhythmOf(group, account.id)), colors },
-      ])
-      return { groupId, name: labelOf(group), startsOn: window.startsOn, weeks: weeksOf(calendar.rows[0]?.days ?? []) }
-    }),
-  )
-  return heatmaps
-    .filter((heatmap) => heatmap !== null)
-    .sort((a, b) => compare(a.name, b.name) || compare(a.groupId, b.groupId))
 }

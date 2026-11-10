@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { authFor, type Database } from './db.ts'
 import { upsertAccount } from './accounts.ts'
+import { badgeOf, initialsOf, parseBadgeEmoji, setBadge } from './badges.ts'
 import { recordPayment, type PaymentFailure, type PaymentInput } from './balances.ts'
 import { clearCookie, readCookie, writeCookie } from './cookies.ts'
 import {
@@ -13,7 +14,8 @@ import {
   type CreateChallengeInput,
   type RhythmInput,
 } from './challenge.ts'
-import { listHeatmaps, utcToday } from './calendar.ts'
+import { utcToday } from './calendar.ts'
+import { listHeatmaps } from './heatmaps.ts'
 import type { IsoDate } from './challenge.ts'
 import { logCheckIn, type CheckInInput } from './checkins.ts'
 import { recordDropout, type DropoutFailure, type DropoutInput } from './dropouts.ts'
@@ -23,8 +25,10 @@ import { readBrowser } from './browser.ts'
 import { installAssets, OFFLINE_PATH } from './install.ts'
 import { googleIdentity, type Account, type AuthFailure, type FirebaseWebConfig, type IdToken, type Viewer } from './identity.ts'
 import {
+  badgePath,
   groupHref,
   matchGroupPath,
+  renderBadge,
   renderFailure,
   renderGroup,
   renderHome,
@@ -35,6 +39,7 @@ import {
   type GroupRoute,
 } from './page.ts'
 import { accountForSession, createSession, deleteSession } from './sessions.ts'
+import { readUsers } from './store.ts'
 import { checkInToast, takeToast, toastCookie, type Toast, type ToastReceipt } from './toasts.ts'
 import { timeStep } from './timing.ts'
 
@@ -139,6 +144,11 @@ export function createApp(deps: AppDeps) {
         return
       }
 
+      if (path === badgePath) {
+        await handleBadge(req, res, method, deps)
+        return
+      }
+
       const groupRoute = matchGroupPath(path)
       if (groupRoute) {
         await handleGroup(req, res, method, origin, groupRoute, deps)
@@ -182,6 +192,37 @@ export function createApp(deps: AppDeps) {
       sendHtml(res, 500, renderMessage('Something went wrong', 'Try that again.'))
     }
   }
+}
+
+async function badgePage(deps: AppDeps, account: Account, failed = false): Promise<string> {
+  const user = (await readUsers(deps.db, [account.id])).get(account.id)
+  const displayName = user?.displayName ?? account.displayName
+  const badge = badgeOf({ displayName, badgeEmoji: user?.badgeEmoji ?? null })
+  return renderBadge({ state: 'signed_in', badge, initials: initialsOf(displayName), failed })
+}
+
+async function handleBadge(req: IncomingMessage, res: ServerResponse, method: string, deps: AppDeps): Promise<void> {
+  if (method !== 'GET' && method !== 'POST') return rejectMethod(res, 'GET, POST')
+  const viewer = await viewerFrom(req, deps)
+  if (viewer.state === 'signed_out') {
+    req.resume()
+    sendHtml(res, method === 'GET' ? 200 : 401, renderBadge(viewer))
+    return
+  }
+  if (method === 'GET') {
+    sendHtml(res, 200, await badgePage(deps, viewer.account))
+    return
+  }
+  const form = await readForm(req)
+  if (!(form instanceof URLSearchParams)) return rejectForm(res, form)
+  const choice = form.get('emoji') ?? ''
+  const emoji = parseBadgeEmoji(choice)
+  if (emoji === null && choice !== 'initials') {
+    sendHtml(res, 400, await badgePage(deps, viewer.account, true))
+    return
+  }
+  await setBadge(deps.db, viewer.account.id, emoji)
+  sendRedirect(res, '/', [toastCookie({ kind: 'badge_saved' })], 303)
 }
 
 function rejectMethod(res: ServerResponse, allow: string): void {

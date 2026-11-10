@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildCalendar, listHeatmaps, weeksOf, type CalendarMember, type DayMark } from '../src/calendar.ts'
+import { buildCalendar, weeksOf, type CalendarMember, type DayMark } from '../src/calendar.ts'
+import { listHeatmaps } from '../src/heatmaps.ts'
 import { parseIsoDate, saveChallenge, saveRhythm, startChallenge, type IsoDate } from '../src/challenge.ts'
 import { logCheckIn } from '../src/checkins.ts'
 import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'

@@ -1,6 +1,7 @@
 import {
   paymentFailureCopy,
   type GroupLedger,
+  type Standing,
   type Ledger,
   type Payment,
   type PaymentFailure,
@@ -30,7 +31,8 @@ import {
   type StartStep,
 } from './challenge.ts'
 import { CURRENCY_CODES } from './currencies.ts'
-import { DAY_MARK_LABELS, type GroupCalendar, type Heatmap, type MarkedDay } from './calendar.ts'
+import { BADGE_EMOJIS, type Badge, type BadgeEmoji } from './badges.ts'
+import { DAY_MARK_LABELS, type GroupCalendar, type Heatmap, type MarkedDay, type RowMember } from './calendar.ts'
 import { dropoutFailureCopy, type DropoutFailure, type DropoutInput } from './dropouts.ts'
 import { CHECK_IN_LABELS, checkInFailureCopy, type CheckIn, type CheckInFailure } from './checkins.ts'
 import { deleteFailureCopy, dropNameFailureCopy, parseGroupId, type DeleteFailure, type DropNameFailure, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
@@ -303,6 +305,27 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
       font-size: 22px;
       font-weight: 650;
     }
+    ul.standings { list-style: none; display: flex; gap: 4px; margin: 12px 0 0; padding: 0; }
+    ul.standings li { flex: 1 1 0; min-width: 0; }
+    .row-badge {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      min-width: 0;
+      color: #1c1915;
+      text-decoration: none;
+      touch-action: manipulation;
+    }
+    .row-badge .avatar { width: 44px; height: 44px; }
+    a.row-badge .avatar { box-shadow: inset 0 0 0 2px #1c1915; }
+    .badge-emoji { font-size: 24px; line-height: 1; }
+    .badge-initials { font-size: 16px; }
+    .badge-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
+    .bags { max-width: 100%; font-size: clamp(7px, 2.6vw, 10px); line-height: 1.2; letter-spacing: -1px; white-space: nowrap; text-align: center; color: #5c564c; }
+    .badge-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 16px; }
+    .badge-grid button { width: auto; min-height: 52px; margin: 0; padding: 0; background: #f6f1e8; color: #1c1915; font-size: 26px; }
+    .badge-grid button[aria-pressed="true"], button.secondary[aria-pressed="true"] { box-shadow: inset 0 0 0 2px #1c1915; background: #efe8dc; }
     .name { font-weight: 650; }
     .email { color: #5c564c; font-size: 14px; overflow-wrap: anywhere; }
     form { margin: 0; }
@@ -572,6 +595,7 @@ const paymentSuffix = '/payment'
 const dropoutSuffix = '/dropout'
 const deleteSuffix = '/delete'
 const dropNameSuffix = '/drop-name'
+export const badgePath = '/badge'
 
 export type HomePage =
   | Extract<Viewer, { state: 'signed_out' }>
@@ -680,6 +704,7 @@ export function safeReturnPath(raw: string | null): string {
   const route = matchGroupPath(raw)
   if (route?.kind === 'new') return `${groupsRoot}/new`
   if (route?.kind === 'show') return groupHref(route.groupId)
+  if (raw === badgePath) return badgePath
   return '/'
 }
 
@@ -734,6 +759,42 @@ function heatmapGrid(heatmap: Heatmap): string {
   return `${title}<div class="grid-scroll"><table class="grid heatmap" data-group="${escapeHtml(heatmap.groupId)}"><tbody>${rows}</tbody></table></div>`
 }
 
+function badgeCircle(badge: Badge): string {
+  if (badge.kind === 'emoji') return `<span class="avatar badge-emoji" aria-hidden="true">${escapeHtml(badge.emoji)}</span>`
+  return `<span class="avatar badge-initials" aria-hidden="true">${escapeHtml(badge.initials)}</span>`
+}
+
+const STANDING_WORDS = { ahead: 'ahead', behind: 'behind', even: 'even' } as const
+
+function standingLine(standing: Standing): string {
+  if (standing.kind === 'even') return '<span class="bags" aria-hidden="true">—</span>'
+  const bag = standing.kind === 'ahead' ? '💰' : '💸'
+  return `<span class="bags" aria-hidden="true">${bag.repeat(standing.bags)}</span>`
+}
+
+// The row never shows amounts: only who is ahead and by roughly how much, in bags.
+function rowItem(member: RowMember): string {
+  const label = member.standing ? `${member.firstName}, ${STANDING_WORDS[member.standing.kind]}` : member.firstName
+  const bags = member.standing ? standingLine(member.standing) : ''
+  const kind = member.standing?.kind ?? 'none'
+  const body = `${badgeCircle(member.badge)}<span class="badge-name" aria-hidden="true">${escapeHtml(member.firstName)}</span>${bags}`
+  const item = member.isViewer
+    ? `<a class="row-badge" href="${badgePath}" aria-label="${escapeHtml(`${label}. Change your badge`)}">${body}</a>`
+    : `<span class="row-badge" role="img" aria-label="${escapeHtml(label)}">${body}</span>`
+  return `<li data-member="${escapeHtml(member.userId)}" data-standing="${kind}">${item}</li>`
+}
+
+function standingsRow(heatmap: Heatmap): string {
+  if (!heatmap.members) return ''
+  const started = heatmap.members.some((member) => member.standing !== null)
+  const label = `${started ? 'Standing in' : 'Members of'} ${heatmap.name}`
+  return `<ul class="standings" aria-label="${escapeHtml(label)}" data-group="${escapeHtml(heatmap.groupId)}">${heatmap.members.map(rowItem).join('')}</ul>`
+}
+
+function heatmapBlock(heatmap: Heatmap): string {
+  return `${heatmapGrid(heatmap)}${standingsRow(heatmap)}`
+}
+
 function signedOutScreens(viewer: SignedOut): string {
   return `
     <section id="home" class="screen">
@@ -764,7 +825,7 @@ function signedInScreens(page: Extract<HomePage, { state: 'signed_in' }>): strin
       <article class="card">
         <h2>Hello, ${name}</h2>
         ${homeGroups(groups)}
-        ${heatmaps.map(heatmapGrid).join('')}
+        ${heatmaps.map(heatmapBlock).join('')}
         <div class="new-group">
           <p class="section-title">Start something new</p>
           <p class="field-hint">Set the terms, then invite up to 4 friends or go solo.</p>
@@ -1378,6 +1439,35 @@ export function renderGroup(
     ${deleteForm(view, userId)}
     <p class="share">Share this link to invite someone. <a href="${share}">${share}</a></p>
   `, toast)
+}
+
+export type BadgePage =
+  | SignedOut
+  | { readonly state: 'signed_in'; readonly badge: Badge; readonly initials: string; readonly failed?: boolean }
+
+export function renderBadge(page: BadgePage): string {
+  if (page.state === 'signed_out') {
+    return groupCard(`
+      <h2>Your badge</h2>
+      <p>Sign in to pick your badge.</p>
+      ${signInControl(page, badgePath)}
+    `)
+  }
+  const chosen: BadgeEmoji | null = page.badge.kind === 'emoji' ? page.badge.emoji : null
+  const message = page.failed ? '<p class="start-error" role="alert">Pick one of the badges below.</p>' : ''
+  const buttons = BADGE_EMOJIS.map(
+    (emoji) =>
+      `<button type="submit" name="emoji" value="${escapeHtml(emoji)}" aria-pressed="${emoji === chosen}">${escapeHtml(emoji)}</button>`,
+  ).join('')
+  return groupCard(`
+    <h2>Your badge</h2>
+    <p>Your badge stands for you on every challenge. Only you can change it.</p>
+    ${message}
+    <form method="post" action="${badgePath}">
+      <div class="badge-grid">${buttons}</div>
+      <button type="submit" class="secondary" name="emoji" value="initials" aria-pressed="${chosen === null}">Use initials (${escapeHtml(page.initials)})</button>
+    </form>
+  `)
 }
 
 export function renderFailure(failure: AuthFailure): string {

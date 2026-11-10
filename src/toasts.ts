@@ -28,6 +28,7 @@ export type Toast =
   | { readonly kind: 'dropped'; readonly member: string; readonly lastDay: IsoDate }
   | { readonly kind: 'deleted'; readonly group: string }
   | { readonly kind: 'name_dropped'; readonly label: string }
+  | { readonly kind: 'badge_saved' }
 
 export type ToastReceipt = {
   readonly text: string | null
@@ -75,6 +76,8 @@ export function toastText(toast: Toast): string {
       return `Deleted ${toast.group}.`
     case 'name_dropped':
       return `Now called ${toast.label}.`
+    case 'badge_saved':
+      return 'Badge updated.'
   }
 }
 

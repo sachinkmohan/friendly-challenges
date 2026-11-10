@@ -43,3 +43,11 @@ _Avoid_: Log day, check-in day
 **Check-in**:
 A member's record for one due day: kept (green) or missed (red). Logging a day again replaces its check-in. The action is "log a day".
 _Avoid_: Log entry, update
+
+**Badge**:
+A member's chosen emoji, or their initials until they pick one: the first letters of their first and last words, or the first two letters of a single word. The same badge stands for them on every challenge, and only they can change it.
+_Avoid_: Avatar, mark, icon
+
+**Standing**:
+What a member has won or lost from missed days across a whole group challenge, before any payments: ahead, even, or behind. It counts missed days of members who have since left.
+_Avoid_: Balance, score, net, earnings
