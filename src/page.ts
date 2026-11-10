@@ -322,7 +322,7 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
     .badge-emoji { font-size: 24px; line-height: 1; }
     .badge-initials { font-size: 16px; }
     .badge-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
-    .bags { max-width: 100%; font-size: 11px; line-height: 1.2; text-align: center; word-break: break-all; color: #5c564c; }
+    .bags { max-width: 100%; font-size: clamp(7px, 2.6vw, 10px); line-height: 1.2; letter-spacing: -1px; white-space: nowrap; text-align: center; color: #5c564c; }
     .badge-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 16px; }
     .badge-grid button { width: auto; min-height: 52px; margin: 0; padding: 0; background: #f6f1e8; color: #1c1915; font-size: 26px; }
     .badge-grid button[aria-pressed="true"], button.secondary[aria-pressed="true"] { box-shadow: inset 0 0 0 2px #1c1915; background: #efe8dc; }
