@@ -243,8 +243,9 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
     .check-in-colors { display: flex; gap: 12px; }
     .check-in-colors button.green { background: #2f7d4a; }
     .check-in-colors button.red { background: #b3392f; }
-    .check-in-colors button:disabled { opacity: 0.45; cursor: progress; }
-    .check-in-colors button.is-saving { opacity: 1; }
+    button:disabled { opacity: 0.45; cursor: progress; }
+    button.is-saving { opacity: 1; }
+    .spinner { display: inline-block; width: 1em; height: 1em; margin-right: 8px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: middle; box-sizing: border-box; }
     button.danger { background: #b3392f; }
     label.confirm { gap: 12px; font-weight: 400; }
     label.confirm input { width: 20px; min-height: 20px; margin: 0; flex: none; }
@@ -325,6 +326,8 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
     .bags { max-width: 100%; font-size: clamp(7px, 2.6vw, 10px); line-height: 1.2; letter-spacing: -1px; white-space: nowrap; text-align: center; color: #5c564c; }
     .badge-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 16px; }
     .badge-grid button { width: auto; min-height: 52px; margin: 0; padding: 0; background: #f6f1e8; color: #1c1915; font-size: 26px; }
+    .badge-grid button.is-saving { flex-direction: column; gap: 4px; min-width: 0; overflow: hidden; font-size: 11px; white-space: nowrap; }
+    .badge-grid button.is-saving .spinner { margin-right: 0; }
     .badge-grid button[aria-pressed="true"], button.secondary[aria-pressed="true"] { box-shadow: inset 0 0 0 2px #1c1915; background: #efe8dc; }
     .name { font-weight: 650; }
     .email { color: #5c564c; font-size: 14px; overflow-wrap: anywhere; }
@@ -441,6 +444,10 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
       @keyframes toast-in {
         from { opacity: 0; transform: translateY(-8px); }
       }
+      .spinner { animation: spin 800ms linear infinite; }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
     }
     @media (max-width: 500px), (max-height: 500px) {
       html, body, .stage { height: auto; overflow: visible; }
@@ -505,6 +512,52 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
       close.hidden = false
       close.addEventListener('click', hide)
       setTimeout(hide, 4000)
+    })
+    document.addEventListener('submit', function (event) {
+      var form = event.target
+      if (event.defaultPrevented || !form.matches('form[method=post]') || form.matches('.sign-in')) return
+      if (form.getAttribute('aria-busy') === 'true') {
+        event.preventDefault()
+        return
+      }
+      var buttons = Array.prototype.filter.call(form.querySelectorAll('button'), function (button) { return button.type === 'submit' })
+      var tapped = event.submitter || buttons[0]
+      form.setAttribute('aria-busy', 'true')
+      if (event.submitter && event.submitter.name) {
+        // A disabled button's value is left out of the post, so the tapped button's value rides in a hidden field.
+        var carrier = document.createElement('input')
+        carrier.type = 'hidden'
+        carrier.name = event.submitter.name
+        carrier.value = event.submitter.value
+        carrier.setAttribute('data-saving-carrier', '')
+        form.appendChild(carrier)
+      }
+      buttons.forEach(function (button) {
+        if (button.disabled) return
+        button.disabled = true
+        button.setAttribute('data-saving-locked', '')
+      })
+      if (tapped) {
+        tapped.setAttribute('data-saving-label', tapped.innerHTML)
+        tapped.classList.add('is-saving')
+        tapped.innerHTML = '<span class="spinner" aria-hidden="true"></span>Saving…'
+      }
+    })
+    window.addEventListener('pageshow', function (event) {
+      if (!event.persisted) return
+      document.querySelectorAll('form[aria-busy]').forEach(function (form) {
+        form.querySelectorAll('[data-saving-carrier]').forEach(function (carrier) { carrier.remove() })
+        form.removeAttribute('aria-busy')
+        form.querySelectorAll('[data-saving-locked]').forEach(function (button) {
+          button.disabled = false
+          button.removeAttribute('data-saving-locked')
+        })
+        form.querySelectorAll('[data-saving-label]').forEach(function (button) {
+          button.innerHTML = button.getAttribute('data-saving-label')
+          button.removeAttribute('data-saving-label')
+          button.classList.remove('is-saving')
+        })
+      })
     })
     ${installScript}
   </script>
@@ -1119,36 +1172,6 @@ function checkInControl(
         var today = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate())
         if (today < input.max) input.max = today
         if (!input.value) input.value = today
-      })()
-      ;(function () {
-        var form = document.querySelector('form.check-in')
-        if (!form) return
-        var buttons = Array.prototype.slice.call(form.querySelectorAll('.check-in-colors button'))
-        var labels = buttons.map(function (button) { return button.textContent })
-        // A disabled button's value is left out of the post, so the tapped color rides in a hidden field.
-        var color = document.createElement('input')
-        color.type = 'hidden'
-        form.addEventListener('submit', function (event) {
-          var tapped = event.submitter
-          if (!tapped || buttons.indexOf(tapped) < 0) return
-          color.name = tapped.name
-          color.value = tapped.value
-          form.appendChild(color)
-          form.setAttribute('aria-busy', 'true')
-          buttons.forEach(function (button) { button.disabled = true })
-          tapped.classList.add('is-saving')
-          tapped.textContent = 'Saving…'
-        })
-        window.addEventListener('pageshow', function (event) {
-          if (!event.persisted) return
-          color.remove()
-          form.removeAttribute('aria-busy')
-          buttons.forEach(function (button, index) {
-            button.disabled = false
-            button.classList.remove('is-saving')
-            button.textContent = labels[index]
-          })
-        })
       })()
     </script>`
 }
