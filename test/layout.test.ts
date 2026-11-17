@@ -64,6 +64,26 @@ test('every page is the same phone shell, full screen on a phone', () => {
   assert.doesNotMatch(preview, /<section[^>]*\sid=/)
 })
 
+test('every page ships one save lock that shows Saving… and unlocks on back', () => {
+  const pages = [
+    renderHome(signedOut),
+    renderNewChallenge({ state: 'signed_in', account }),
+    renderBadge({ state: 'signed_in', badge: { kind: 'initials', initials: 'AD' }, initials: 'AD' }),
+  ]
+  for (const html of pages) {
+    assert.equal(html.split("document.addEventListener('submit'").length - 1, 1)
+    assert.equal(html.split("addEventListener('pageshow'").length - 1, 1)
+    assert.match(html, /<span class="spinner" aria-hidden="true"><\/span>Saving…/)
+    assert.match(html, /form\.matches\('\.sign-in'\)/, 'Google sign-in is left alone')
+    assert.match(html, /aria-busy/)
+    assert.match(html, /\n    button:disabled \{ opacity: 0\.45; cursor: progress; \}/)
+    const motion = html.match(/@media \(prefers-reduced-motion: no-preference\) \{([\s\S]*?)\n    \}/)?.[1] ?? ''
+    assert.match(motion, /\.spinner \{ animation: spin/, 'the spinner turns only when motion is welcome')
+    const outside = html.replace(motion, '')
+    assert.doesNotMatch(outside, /\.spinner \{[^}]*animation/)
+  }
+})
+
 test('signed-out shell keeps Google sign-in on the phone screens', () => {
   const html = renderHome(signedOut)
   assert.match(html, /Sign in with Google/)

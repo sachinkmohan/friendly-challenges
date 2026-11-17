@@ -293,6 +293,7 @@ test('the group card logs a day and lists who logged what', async () => {
     assert.match(page, new RegExp(`action="${checkInPath}"`))
     assert.match(page, /name="color" value="green"/)
     assert.match(page, /name="color" value="red"/)
+    assert.equal(page.split("addEventListener('pageshow'").length - 1, 1, 'Kept it and Missed it use the shared save lock')
     assert.doesNotMatch(page, /Check-ins/)
 
     const looked = await fetch(`${base}${checkInPath}`)
