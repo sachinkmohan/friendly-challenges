@@ -538,7 +538,10 @@ const frame = (screens: string, head: PageHead, toast: string | null = null) => 
       if (match) lines.forEach(function (line) { line.hidden = line.getAttribute('data-day') !== today })
       card.addEventListener('click', function (event) {
         if (event.defaultPrevented || event.target.closest('a, button, form, input, label')) return
-        card.querySelector('a.card-link').click()
+        if (String(window.getSelection())) return
+        var link = card.querySelector('a.card-link')
+        if (event.metaKey || event.ctrlKey) window.open(link.href, '_blank')
+        else link.click()
       })
     })
     window.addEventListener('popstate', applyScreen)
