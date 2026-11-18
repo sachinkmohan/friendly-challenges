@@ -452,7 +452,7 @@ test('only the creator of a named group sees "Use the challenge name instead", a
     assert.deepEqual(await saveChallenge(db, adaAccount, groupId, { ...fixtureTerms, name: 'No sweets' }), { ok: true, name: 'No sweets' })
 
     const before = await page(ada.cookie, groupPath)
-    assert.match(before, /<h2>Pantry crew<\/h2>/)
+    assert.match(before, /<h1>Pantry crew<\/h1>/)
     assert.match(before, new RegExp(`action="${groupPath}/drop-name"`))
     assert.match(before, /Use the challenge name instead/)
     assert.doesNotMatch(await page(grace.cookie, groupPath), /Use the challenge name instead/)
@@ -469,7 +469,7 @@ test('only the creator of a named group sees "Use the challenge name instead", a
     const toast = (dropped.headers as Headers & { getSetCookie: () => string[] }).getSetCookie().find((line) => line.startsWith('toast='))
     assert.equal(decodeURIComponent((toast ?? '').split(';')[0]!.slice('toast='.length)), 'Now called No sweets.')
     const after = await page(ada.cookie, groupPath)
-    assert.match(after, /<h2>No sweets<\/h2>/)
+    assert.match(after, /<h1>No sweets<\/h1>/)
     assert.doesNotMatch(after, /Use the challenge name instead/)
     assert.match(await page(ada.cookie, '/'), /<span class="group-name">No sweets<\/span>/)
     assert.equal((await postForm(base, `${groupPath}/drop-name`, ada.cookie)).status, 303)

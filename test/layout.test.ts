@@ -150,3 +150,55 @@ test('home keeps your groups apart from creating a new one', () => {
   assert.match(html, /<a href="\/groups\/[^"]+"><span class="group-name">100 Days of Writing<\/span><span class="count">2 active<\/span>/)
   assert.match(html, /<div class="new-group">/)
 })
+
+test('the top bar names the page and inner pages get a back arrow', () => {
+  const groupId = parseGroupId('00000000-0000-4000-8000-000000000001')
+  if (!groupId) throw new Error('fixture group id')
+  const tabs = (html: string) => html.match(/<nav class="tabbar"[\s\S]*?<\/nav>/)?.[0] ?? ''
+
+  const home = renderHome(signedOut)
+  assert.match(home, /<h1>Friendly challenges<\/h1>/)
+  assert.match(home, /<title>Friendly challenges<\/title>/)
+  assert.doesNotMatch(home, /class="appbar-back"/)
+  assert.match(tabs(home), /class="tab tab-home" href="#home" aria-current="page"/)
+  assert.doesNotMatch(tabs(home), /tab-account[^>]*aria-current/)
+
+  const inner = [
+    { title: 'New challenge', html: renderNewChallenge(signedOut) },
+    { title: 'New challenge', html: renderNewChallenge({ state: 'signed_in', account }) },
+    { title: 'Your badge', html: renderBadge(signedOut) },
+    { title: 'Your badge', html: renderBadge({ state: 'signed_in', badge: { kind: 'initials', initials: 'AD' }, initials: 'AD' }) },
+    { title: 'Not found', html: renderMessage('Not found', 'That page does not exist.') },
+    { title: 'Run &amp; &lt;b&gt;', html: renderMessage('Run & <b>', 'x') },
+    {
+      title: 'Morning run',
+      html: renderGroup({ kind: 'preview', groupId, label: 'Morning run', activeCount: 1, headline: null }, signedOut, 'http://127.0.0.1:3000'),
+    },
+    {
+      title: 'Full house',
+      html: renderGroup({ kind: 'full', groupId, label: 'Full house', activeCount: 8, headline: null }, signedOut, 'http://127.0.0.1:3000'),
+    },
+  ]
+  const headings = (html: string) => html.match(/<h2>[\s\S]*?<\/h2>/g) ?? []
+  for (const { title, html } of inner) {
+    assert.match(html, /<a class="appbar-back" href="\/" aria-label="Back to Home"><svg[^>]*aria-hidden="true"/)
+    assert.ok(html.includes(`<h1>${title}</h1>`), title)
+    assert.ok(html.includes(`<title>${title}</title>`), title)
+    assert.ok(!headings(html).some((h) => h === `<h2>${title}</h2>`), 'the title is not repeated under the top bar')
+    assert.doesNotMatch(tabs(html), /aria-current/)
+    assert.doesNotMatch(html, /<h2>Create a challenge<\/h2>/, 'the old create heading is gone')
+  }
+
+  const css = home.match(/\n    h1 \{[^}]*\}/)?.[0] ?? ''
+  assert.match(css, /white-space: nowrap/)
+  assert.match(css, /overflow: hidden/)
+  assert.match(css, /text-overflow: ellipsis/)
+  assert.match(css, /min-width: 0/)
+  const back = home.match(/\.appbar-back \{[^}]*\}/)?.[0] ?? ''
+  assert.match(back, /width: 48px/)
+  assert.match(back, /height: 48px/)
+  assert.match(home, /grid-template-columns: 48px minmax\(0, 1fr\) 48px/)
+
+  const script = home.match(/function applyScreen\(\) \{\n\s*if \(!document\.getElementById\('home'\)\) return/)
+  assert.ok(script, 'applyScreen bails out on pages without the home screen')
+})
