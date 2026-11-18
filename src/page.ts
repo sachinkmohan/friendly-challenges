@@ -120,6 +120,7 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
       background: #efeae1;
     }
     .appbar {
+      position: relative;
       flex: none;
       display: flex;
       align-items: center;
@@ -245,6 +246,10 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
     .check-in-colors button.red { background: #b3392f; }
     button:disabled { opacity: 0.45; cursor: progress; }
     button.is-saving { opacity: 1; }
+    a.is-navigating { opacity: 0.6; }
+    .nav-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; overflow: hidden; }
+    .nav-progress[hidden] { display: none; }
+    .nav-progress::before { content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 40%; background: #1c1915; }
     .spinner { display: inline-block; width: 1em; height: 1em; margin-right: 8px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: middle; box-sizing: border-box; }
     button.danger { background: #b3392f; }
     label.confirm { gap: 12px; font-weight: 400; }
@@ -448,6 +453,11 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
       @keyframes spin {
         to { transform: rotate(360deg); }
       }
+      .nav-progress::before { animation: nav-slide 1s ease-in-out infinite; }
+      @keyframes nav-slide {
+        from { transform: translateX(-100%); }
+        to { transform: translateX(250%); }
+      }
     }
     @media (max-width: 500px), (max-height: 500px) {
       html, body, .stage { height: auto; overflow: visible; }
@@ -469,6 +479,7 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
       <div class="phone">
         <header class="appbar">
           <h1>Friendly challenges</h1>
+          <div class="nav-progress" aria-hidden="true" hidden></div>
         </header>
         ${toastRegion(toast)}
         <main class="screens">
@@ -543,8 +554,22 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
         tapped.innerHTML = '<span class="spinner" aria-hidden="true"></span>Saving…'
       }
     })
+    document.addEventListener('click', function (event) {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+      var link = event.target.closest && event.target.closest('a[href]')
+      if (!link) return
+      var target = link.getAttribute('target')
+      if ((target && target !== '_self') || link.hasAttribute('download')) return
+      var url = new URL(link.href)
+      if (url.origin !== location.origin) return
+      if (url.pathname === location.pathname && url.search === location.search) return
+      document.querySelector('.nav-progress').hidden = false
+      link.classList.add('is-navigating')
+    })
     window.addEventListener('pageshow', function (event) {
       if (!event.persisted) return
+      document.querySelector('.nav-progress').hidden = true
+      document.querySelectorAll('a.is-navigating').forEach(function (link) { link.classList.remove('is-navigating') })
       document.querySelectorAll('form[aria-busy]').forEach(function (form) {
         form.querySelectorAll('[data-saving-carrier]').forEach(function (carrier) { carrier.remove() })
         form.removeAttribute('aria-busy')
