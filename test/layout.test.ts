@@ -84,6 +84,32 @@ test('every page ships one save lock that shows Saving… and unlocks on back', 
   }
 })
 
+test('every page shows a progress bar and dims the tapped link while the next page loads', () => {
+  const pages = [
+    renderHome(signedOut),
+    renderNewChallenge({ state: 'signed_in', account }),
+    renderBadge({ state: 'signed_in', badge: { kind: 'initials', initials: 'AD' }, initials: 'AD' }),
+    renderMessage('Not found', 'That page does not exist.'),
+  ]
+  for (const html of pages) {
+    const appbar = html.match(/<header class="appbar">([\s\S]*?)<\/header>/)?.[1] ?? ''
+    assert.match(appbar, /<div class="nav-progress" aria-hidden="true" hidden><\/div>/, 'the bar starts hidden inside the appbar')
+    assert.equal(html.split("document.addEventListener('click'").length - 1, 1)
+    assert.match(html, /event\.defaultPrevented/, 'the tab handler already took the tap')
+    assert.match(html, /location\.origin/, 'other origins are left alone')
+    const pageshow = html.match(/addEventListener\('pageshow'[\s\S]*?\n    \}\)/)?.[0] ?? ''
+    assert.match(pageshow, /remove\('is-navigating'\)/, 'coming back clears the dimmed link')
+    assert.match(pageshow, /nav-progress/, 'coming back hides the bar')
+    assert.match(html, /\n    a\.is-navigating \{ opacity: 0\.6; \}/)
+    assert.match(html, /\n    \.nav-progress\[hidden\] \{ display: none; \}/)
+    const motion = html.match(/@media \(prefers-reduced-motion: no-preference\) \{([\s\S]*?)\n    \}/)?.[1] ?? ''
+    assert.match(motion, /\.nav-progress::before \{ animation: nav-slide/, 'the bar moves only when motion is welcome')
+    const outside = html.replace(motion, '')
+    assert.doesNotMatch(outside, /animation: nav-slide|@keyframes nav-slide/)
+    assert.match(outside, /\.nav-progress::before \{[^}]*width: 40%/, 'with reduced motion the bar is a still segment')
+  }
+})
+
 test('signed-out shell keeps Google sign-in on the phone screens', () => {
   const html = renderHome(signedOut)
   assert.match(html, /Sign in with Google/)
