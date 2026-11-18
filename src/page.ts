@@ -63,9 +63,13 @@ function safeAvatar(url: string | null): string | null {
 const homeIcon = `<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M12 3.2 3 11h2v9h6v-6h2v6h6v-9h2L12 3.2z"/></svg>`
 const accountIcon = `<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-7 2.2-7 5v1h14v-1c0-2.8-3-5-7-5z"/></svg>`
 
-function tabBar(homeHref: string, accountHref: string): string {
+type PageHead = { readonly kind: 'home' } | { readonly kind: 'inner'; readonly title: string }
+
+const backIcon = `<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M15.4 5.4 14 4l-8 8 8 8 1.4-1.4L8.8 12z"/></svg>`
+
+function tabBar(homeHref: string, accountHref: string, homeCurrent: boolean): string {
   return `<nav class="tabbar" aria-label="Primary">
-    <a class="tab tab-home" href="${homeHref}" aria-current="page">${homeIcon}<span>Home</span></a>
+    <a class="tab tab-home" href="${homeHref}"${homeCurrent ? ' aria-current="page"' : ''}>${homeIcon}<span>Home</span></a>
     <a class="tab tab-account" href="${accountHref}">${accountIcon}<span>Account</span></a>
   </nav>`
 }
@@ -78,14 +82,18 @@ function toastRegion(text: string | null): string {
         </div>`
 }
 
-const frame = (screens: string, tabs: string, toast: string | null = null) => `<!doctype html>
+const frame = (screens: string, head: PageHead, toast: string | null = null) => {
+  const title = head.kind === 'home' ? 'Friendly challenges' : escapeHtml(head.title)
+  const back = head.kind === 'inner' ? `<a class="appbar-back" href="/" aria-label="Back to Home">${backIcon}</a>` : ''
+  const tabs = head.kind === 'home' ? tabBar('#home', '#account', true) : tabBar('/', '/#account', false)
+  return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#fffdf8">
   ${installHead}
-  <title>Friendly challenges</title>
+  <title>${title}</title>
   <style>
     * { box-sizing: border-box; }
     html, body { height: 100%; overflow: hidden; }
@@ -122,18 +130,33 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
     .appbar {
       position: relative;
       flex: none;
-      display: flex;
+      display: grid;
+      grid-template-columns: 48px minmax(0, 1fr) 48px;
       align-items: center;
-      justify-content: center;
       height: 56px;
       background: #fffdf8;
       border-bottom: 1px solid #e7e0d4;
     }
     h1 {
+      grid-column: 2;
+      min-width: 0;
       margin: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      text-align: center;
       font-size: 17px;
       font-weight: 650;
       letter-spacing: -0.01em;
+    }
+    .appbar-back {
+      grid-column: 1;
+      grid-row: 1;
+      display: grid;
+      place-items: center;
+      width: 48px;
+      height: 48px;
+      color: #1c1915;
     }
     .screens {
       flex: 1;
@@ -478,7 +501,8 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
     <div class="device">
       <div class="phone">
         <header class="appbar">
-          <h1>Friendly challenges</h1>
+          ${back}
+          <h1>${title}</h1>
           <div class="nav-progress" aria-hidden="true" hidden></div>
         </header>
         ${toastRegion(toast)}
@@ -492,6 +516,7 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
   </div>
   <script>
     function applyScreen() {
+      if (!document.getElementById('home')) return
       var account = location.hash === '#account'
       document.querySelectorAll('.screen[id]').forEach(function (screen) {
         screen.classList.toggle('is-current', screen.id === (account ? 'account' : 'home'))
@@ -655,6 +680,7 @@ const frame = (screens: string, tabs: string, toast: string | null = null) => `<
 </body>
 </html>
 `
+}
 
 function portrait(person: { displayName: string; avatarUrl: string | null }): string {
   const avatar = safeAvatar(person.avatarUrl)
@@ -931,10 +957,10 @@ function signedInScreens(page: Extract<HomePage, { state: 'signed_in' }>): strin
 
 export function renderHome(page: HomePage, toast: string | null = null): string {
   const screens = page.state === 'signed_out' ? signedOutScreens(page) : signedInScreens(page)
-  return frame(screens, tabBar('#home', '#account'), toast)
+  return frame(screens, { kind: 'home' }, toast)
 }
 
-function groupCard(body: string, toast: string | null = null): string {
+function groupCard(title: string, body: string, toast: string | null = null): string {
   const screens = `
     <section class="screen is-current">
       <article class="card">
@@ -942,7 +968,7 @@ function groupCard(body: string, toast: string | null = null): string {
       </article>
     </section>
   `
-  return frame(screens, tabBar('/', '/#account'), toast)
+  return frame(screens, { kind: 'inner', title }, toast)
 }
 
 type CreateChallengeFailure = Extract<CreateChallengeResult, { ok: false }>['failure']
@@ -1102,8 +1128,7 @@ function termsForm(groupId: GroupId, currencies: readonly string[], values: Term
 
 export function renderNewChallenge(viewer: Viewer, failure?: CreateChallengeFailure, draft?: CreateChallengeInput): string {
   if (viewer.state === 'signed_out') {
-    return groupCard(`
-      <h2>Create a challenge</h2>
+    return groupCard('New challenge', `
       <p>Sign in to create a challenge.</p>
       ${signInControl(viewer, `${groupsRoot}/new`)}
     `)
@@ -1111,8 +1136,7 @@ export function renderNewChallenge(viewer: Viewer, failure?: CreateChallengeFail
   const message = failure ? `<p class="start-error" role="alert">${escapeHtml(challengeFailureCopy[failure])}</p>` : ''
   const values = draft ? termsFromDraft(draft) : emptyTerms
   const solo = draft?.solo ? ' checked' : ''
-  return groupCard(`
-    <h2>Create a challenge</h2>
+  return groupCard('New challenge', `
     <p>Set the terms and how often you log. Invite friends from the challenge page, or make it solo.</p>
     ${message}
     <form method="post" action="${groupsRoot}">
@@ -1436,20 +1460,20 @@ export function renderGroup(
   attempt?: ChallengeAttempt,
   toast: string | null = null,
 ): string {
-  const title = `<h2>${escapeHtml(view.label)}</h2>`
   const count = `<p class="count">${activeCountText(view.activeCount)}</p>`
   const failure = failureParagraph(attempt)
   if (view.kind === 'full') {
-    return groupCard(`${title}${count}${failure}${headlineText(view.headline)}<p>This challenge is full.</p>`, toast)
+    return groupCard(view.label, `${count}${failure}${headlineText(view.headline)}<p>This challenge is full.</p>`, toast)
   }
   if (view.kind === 'solo') {
     return groupCard(
-      `${title}${count}${failure}${headlineText(view.headline)}<p>This is a solo challenge, so nobody can join it.</p>`,
+      view.label,
+      `${count}${failure}${headlineText(view.headline)}<p>This is a solo challenge, so nobody can join it.</p>`,
       toast,
     )
   }
   if (view.kind === 'preview') {
-    return groupCard(`${title}${count}${failure}${headlineText(view.headline)}${joinControl(view.groupId, viewer)}`, toast)
+    return groupCard(view.label, `${count}${failure}${headlineText(view.headline)}${joinControl(view.groupId, viewer)}`, toast)
   }
   const challenge = view.challenge
   const userId = viewer.state === 'signed_in' ? viewer.account.id : ''
@@ -1470,8 +1494,7 @@ export function renderGroup(
   const checkIn = checkInControl(view.groupId, challenge, userId, attempt?.checkInDay)
   const rhythms = challenge.phase === 'unopened' ? [] : challenge.rhythms
   const share = escapeHtml(`${origin}${groupHref(view.groupId)}`)
-  return groupCard(`
-    ${title}
+  return groupCard(view.label, `
     ${count}
     ${dropNameForm(view, challenge, userId)}
     ${failure}
@@ -1495,8 +1518,7 @@ export type BadgePage =
 
 export function renderBadge(page: BadgePage): string {
   if (page.state === 'signed_out') {
-    return groupCard(`
-      <h2>Your badge</h2>
+    return groupCard('Your badge', `
       <p>Sign in to pick your badge.</p>
       ${signInControl(page, badgePath)}
     `)
@@ -1507,8 +1529,7 @@ export function renderBadge(page: BadgePage): string {
     (emoji) =>
       `<button type="submit" name="emoji" value="${escapeHtml(emoji)}" aria-pressed="${emoji === chosen}">${escapeHtml(emoji)}</button>`,
   ).join('')
-  return groupCard(`
-    <h2>Your badge</h2>
+  return groupCard('Your badge', `
     <p>Your badge stands for you on every challenge. Only you can change it.</p>
     ${message}
     <form method="post" action="${badgePath}">
@@ -1526,11 +1547,10 @@ export function renderMessage(title: string, text: string): string {
   const screens = `
     <section class="screen is-current">
       <article class="card">
-        <h2>${escapeHtml(title)}</h2>
         <p>${escapeHtml(text)}</p>
         <a class="button" href="/">Back</a>
       </article>
     </section>
   `
-  return frame(screens, tabBar('/', '/#account'))
+  return frame(screens, { kind: 'inner', title })
 }
