@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { buildCalendar, weeksOf, type CalendarMember, type DayMark } from '../src/calendar.ts'
-import { listHeatmaps } from '../src/heatmaps.ts'
+import { listHomeCards } from '../src/home.ts'
 import { parseIsoDate, saveChallenge, saveRhythm, startChallenge, type IsoDate } from '../src/challenge.ts'
 import { logCheckIn } from '../src/checkins.ts'
 import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
@@ -125,14 +125,15 @@ test('the home heatmap reads only the signed-in member days in active challenges
   try {
     await logCheckIn(db, ada, groupId, { day: '2026-11-02', color: 'green' }, CHECK_IN_TODAY)
     await logCheckIn(db, grace, groupId, { day: '2026-11-03', color: 'red' }, CHECK_IN_TODAY)
-    const [heatmap, ...rest] = await listHeatmaps(db, ada, iso('2026-11-03'))
+    const [card, ...rest] = await listHomeCards(db, ada, iso('2026-11-03'))
     assert.equal(rest.length, 0)
-    assert.equal(heatmap?.groupId, groupId)
+    assert.equal(card?.groupId, groupId)
+    assert.equal(card?.challenge.phase, 'active')
     assert.deepEqual(
-      heatmap?.weeks[0]?.map((slot) => slot?.mark ?? null),
+      card?.challenge.phase === 'active' ? card.challenge.weeks[0]?.map((slot) => slot?.mark ?? null) : null,
       ['red', 'green', 'empty', null, null, null, null],
     )
-    assert.deepEqual(await listHeatmaps(db, await person(db, 'Noor'), iso('2026-11-03')), [])
+    assert.deepEqual(await listHomeCards(db, await person(db, 'Noor'), iso('2026-11-03')), [])
   } finally {
     await closeDatabase(db)
   }

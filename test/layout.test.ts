@@ -23,7 +23,7 @@ test('every page is the same phone shell, full screen on a phone', () => {
   if (!groupId) throw new Error('fixture group id')
   const pages = [
     renderHome(signedOut),
-    renderHome({ state: 'signed_in', account, groups: [], heatmaps: [], browser: signedOut.browser }),
+    renderHome({ state: 'signed_in', account, cards: [], browser: signedOut.browser }),
     renderNewChallenge(signedOut),
     renderNewChallenge({ state: 'signed_in', account }),
     renderGroup(
@@ -120,7 +120,7 @@ test('signed-out shell keeps Google sign-in on the phone screens', () => {
 })
 
 test('signed-in shell keeps the account card and sign-out', () => {
-  const html = renderHome({ state: 'signed_in', account, groups: [], heatmaps: [], browser: signedOut.browser })
+  const html = renderHome({ state: 'signed_in', account, cards: [], browser: signedOut.browser })
   assert.match(html, /Hello, Ada/)
   assert.match(html, /You are not in a challenge yet/)
   assert.match(html, /href="\/groups\/new"/)
@@ -131,24 +131,24 @@ test('signed-in shell keeps the account card and sign-out', () => {
   assert.match(html, /Sign out/)
 })
 
-test('home keeps your groups apart from creating a new one', () => {
+test('home shows one tappable card per challenge, then one Create a challenge button', () => {
   const groupId = parseGroupId('00000000-0000-4000-8000-000000000001')
   if (!groupId) throw new Error('fixture group id')
   const html = renderHome({
     state: 'signed_in',
     account,
-    groups: [{ groupId, label: '100 Days of Writing', activeCount: 2 }],
-    heatmaps: [],
+    cards: [{ groupId, name: '100 Days of Writing', challenge: { phase: 'draft' } }],
     browser: signedOut.browser,
   })
-  const yours = html.indexOf('Your challenges')
-  const group = html.indexOf('100 Days of Writing')
-  const fresh = html.indexOf('Start something new')
+  assert.doesNotMatch(html, /Your challenges/)
+  assert.equal(html.split('100 Days of Writing').length - 1, 1, 'the name shows once')
+  assert.match(html, /<h3><a class="card-link" href="\/groups\/00000000-0000-4000-8000-000000000001">100 Days of Writing<\/a><\/h3>/)
+  assert.match(html, /<p class="today-status">Not started<\/p>/)
+  assert.doesNotMatch(html, /class="card-log"/)
+  const card = html.indexOf('class="card challenge-card"')
   const create = html.indexOf('href="/groups/new"')
-  assert.ok(yours > -1 && yours < group, 'groups sit under a Your challenges label')
-  assert.ok(group < fresh && fresh < create, 'creating a group sits in its own later section')
-  assert.match(html, /<a href="\/groups\/[^"]+"><span class="group-name">100 Days of Writing<\/span><span class="count">2 active<\/span>/)
-  assert.match(html, /<div class="new-group">/)
+  assert.ok(card > -1 && card < create, 'Create a challenge sits below the cards')
+  assert.equal(html.split('href="/groups/new"').length - 1, 1)
 })
 
 test('the top bar names the page and inner pages get a back arrow', () => {
