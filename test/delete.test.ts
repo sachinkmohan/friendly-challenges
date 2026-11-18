@@ -4,7 +4,9 @@ import { recordPayment } from '../src/balances.ts'
 import { parseIsoDate, saveChallenge, saveRhythm, startChallenge, type IsoDate } from '../src/challenge.ts'
 import { logCheckIn } from '../src/checkins.ts'
 import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
-import { deleteGroup, listHomeGroups, type GroupId } from '../src/groups.ts'
+import { deleteGroup, type GroupId } from '../src/groups.ts'
+import { listHomeCards } from '../src/home.ts'
+import { utcToday } from '../src/calendar.ts'
 import type { Account } from '../src/identity.ts'
 import { groupRef, readGroup } from '../src/store.ts'
 import { CHECK_IN_TODAY, closeServer, cookieFor, groupWith, listen, person, post, setJoinedOn, setLeftOn } from './support/fixtures.ts'
@@ -80,7 +82,7 @@ test('deleting removes the group, its check-ins, and its payments for every memb
 
     assert.equal(await readGroup(db, groupId), null)
     assert.equal(await childCount(db, groupId), 0)
-    for (const who of [ada, grace, lin]) assert.deepEqual(await listHomeGroups(db, who), [])
+    for (const who of [ada, grace, lin]) assert.deepEqual(await listHomeCards(db, who, utcToday()), [])
     assert.deepEqual(await logCheckIn(db, grace, groupId, { day: '2026-11-03', color: 'green' }, CHECK_IN_TODAY), {
       ok: false,
       failure: 'group_missing',

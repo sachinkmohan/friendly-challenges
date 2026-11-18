@@ -203,7 +203,7 @@ test('before the first day the row shows badges and names but no standing', asyn
   const { server, base } = await listen(db, { today })
   try {
     const html = await home(base, await cookieFor(db, ada))
-    assert.match(html, /The first day is <time datetime="2026-11-10">/)
+    assert.match(html, /Starts on <time datetime="2026-11-10">/)
     const row = rowOf(html, groupId)
     assert.equal(row?.length, 3)
     assert.deepEqual(row?.map((item) => [item.standing, item.bags]), [

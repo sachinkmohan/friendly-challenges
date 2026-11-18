@@ -130,8 +130,8 @@ test('the creator is the first member and a second person can join', async () =>
     const home = await (await fetch(base, { headers: { cookie: ada.cookie } })).text()
     assert.match(home, /Morning run/)
     assert.match(home, /Evening run/)
-    assert.match(home, /2 active/)
-    assert.match(home, /1 active/)
+    assert.equal(home.split('class="card challenge-card"').length - 1, 2, 'one card per challenge')
+    assert.equal(home.split('<p class="today-status">Not started</p>').length - 1, 2)
     assert.match(home, /Create a challenge/)
   } finally {
     await close(server, db)
@@ -471,7 +471,7 @@ test('only the creator of a named group sees "Use the challenge name instead", a
     const after = await page(ada.cookie, groupPath)
     assert.match(after, /<h1>No sweets<\/h1>/)
     assert.doesNotMatch(after, /Use the challenge name instead/)
-    assert.match(await page(ada.cookie, '/'), /<span class="group-name">No sweets<\/span>/)
+    assert.match(await page(ada.cookie, '/'), /<a class="card-link" href="\/groups\/[^"]+">No sweets<\/a>/)
     assert.equal((await postForm(base, `${groupPath}/drop-name`, ada.cookie)).status, 303)
 
     const fresh = await postForm(base, '/groups', ada.cookie, createForm({ name: 'Evening run' }))

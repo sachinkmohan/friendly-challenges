@@ -39,12 +39,6 @@ export type GroupView =
   | { kind: 'full'; groupId: GroupId; label: string; activeCount: number }
   | { kind: 'solo'; groupId: GroupId; label: string; activeCount: number }
 
-export type HomeGroup = {
-  groupId: GroupId
-  label: string
-  activeCount: number
-}
-
 export function newGroupId(): GroupId {
   const id = parseGroupId(crypto.randomUUID())
   if (!id) throw new Error('group id')
@@ -164,17 +158,4 @@ export function groupViewFrom(
   if (isSolo(group)) return { kind: 'solo', groupId, label, activeCount }
   if (activeCount >= ACTIVE_MEMBER_CAP) return { kind: 'full', groupId, label, activeCount }
   return { kind: 'preview', groupId, label, activeCount }
-}
-
-export async function listHomeGroups(db: Database, account: Account): Promise<readonly HomeGroup[]> {
-  const snapshot = await db.collection('groups').where('memberIds', 'array-contains', account.id).get()
-  const groups: HomeGroup[] = []
-  for (const doc of snapshot.docs) {
-    const groupId = parseGroupId(doc.id)
-    if (!groupId) throw new Error('home group')
-    const group = parseGroup(doc.data())
-    const active = activeMemberIds(group)
-    if (active.includes(account.id)) groups.push({ groupId, label: labelOf(group), activeCount: active.length })
-  }
-  return groups.sort((a, b) => compare(a.label, b.label) || compare(a.groupId, b.groupId))
 }

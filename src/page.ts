@@ -32,10 +32,11 @@ import {
 } from './challenge.ts'
 import { CURRENCY_CODES } from './currencies.ts'
 import { BADGE_EMOJIS, type Badge, type BadgeEmoji } from './badges.ts'
-import { DAY_MARK_LABELS, type GroupCalendar, type Heatmap, type MarkedDay, type RowMember } from './calendar.ts'
+import { DAY_MARK_LABELS, type GroupCalendar, type HeatmapWeek, type MarkedDay, type RowMember } from './calendar.ts'
+import type { DayLine, HomeCard, HomeChallenge } from './home.ts'
 import { dropoutFailureCopy, type DropoutFailure, type DropoutInput } from './dropouts.ts'
 import { CHECK_IN_LABELS, checkInFailureCopy, type CheckIn, type CheckInFailure } from './checkins.ts'
-import { deleteFailureCopy, dropNameFailureCopy, parseGroupId, type DeleteFailure, type DropNameFailure, type GroupId, type GroupView, type HomeGroup, type MemberLine } from './groups.ts'
+import { deleteFailureCopy, dropNameFailureCopy, parseGroupId, type DeleteFailure, type DropNameFailure, type GroupId, type GroupView, type MemberLine } from './groups.ts'
 import type { Browser, Os } from './browser.ts'
 import { authFailureCopy, type Account, type AuthFailure, type Viewer } from './identity.ts'
 import { installCard, installHead, installPrompt, installScript } from './install.ts'
@@ -204,40 +205,30 @@ const frame = (screens: string, head: PageHead, toast: string | null = null) => 
       color: inherit;
       font: inherit;
     }
-    ul.groups, ul.members, ul.check-ins {
+    ul.members, ul.check-ins {
       list-style: none;
       margin: 16px 0 0;
       padding: 0;
     }
-    ul.groups li, ul.members li, ul.check-ins li {
+    ul.members li, ul.check-ins li {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
       gap: 12px;
       min-height: 48px;
     }
-    ul.groups { margin-top: 8px; }
-    ul.groups li + li { margin-top: 8px; }
-    ul.groups a {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      flex: 1;
-      min-height: 56px;
-      padding: 0 12px 0 16px;
-      border: 1px solid #e7e0d4;
-      border-radius: 14px;
-      background: #f6f1e8;
-      color: #1c1915;
-      text-decoration: none;
-      touch-action: manipulation;
-    }
-    ul.groups a:active { background: #efe8dc; }
-    .group-name { flex: 1; min-width: 0; font-weight: 650; overflow-wrap: anywhere; }
-    .chevron { color: #8a8378; font-size: 22px; line-height: 1; }
     .section-title { margin-top: 16px; font-weight: 650; color: #1c1915; }
-    .new-group { margin-top: 24px; padding-top: 16px; border-top: 1px solid #e7e0d4; }
-    .new-group .section-title { margin-top: 0; }
+    .hello { margin: 4px 4px 12px; }
+    .challenge-card { cursor: pointer; }
+    .challenge-card + .challenge-card { margin-top: 12px; }
+    .challenge-card h3 { margin: 0; font-size: 18px; font-weight: 650; overflow-wrap: anywhere; }
+    .card-link { display: block; color: #1c1915; text-decoration: none; }
+    .today-status { margin-top: 4px; }
+    .today-status.kept { color: #2f7d4a; font-weight: 650; }
+    .today-status.missed { color: #b3392f; font-weight: 650; }
+    .card-log button { margin-top: 12px; }
+    .home-empty { margin: 0 4px; }
+    a.button.new-challenge { margin-top: 16px; background: #fffdf8; color: #1c1915; box-shadow: inset 0 0 0 1.5px #1c1915; }
     .install { margin-top: 24px; padding-top: 16px; border-top: 1px solid #e7e0d4; }
     .install .section-title { margin-top: 0; }
     .install .field-hint { margin-top: 8px; }
@@ -247,7 +238,6 @@ const frame = (screens: string, head: PageHead, toast: string | null = null) => 
     .install-steps li + li { margin-top: 4px; }
     .install-steps + .field-hint { margin-top: 8px; }
     .install-icon { vertical-align: middle; margin-top: -3px; color: #1c1915; }
-    .new-group a.button { background: #fffdf8; color: #1c1915; box-shadow: inset 0 0 0 1.5px #1c1915; }
     .count { color: #5c564c; }
     .members time, .rhythm { color: #5c564c; }
     .net.owed { color: #2f7d4a; font-weight: 650; }
@@ -539,6 +529,18 @@ const frame = (screens: string, head: PageHead, toast: string | null = null) => 
         applyScreen()
       })
     })
+    document.querySelectorAll('.challenge-card').forEach(function (card) {
+      var now = new Date()
+      var pad = function (n) { return String(n).padStart(2, '0') }
+      var today = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate())
+      var lines = card.querySelectorAll('.today[data-day]')
+      var match = Array.prototype.some.call(lines, function (line) { return line.getAttribute('data-day') === today })
+      if (match) lines.forEach(function (line) { line.hidden = line.getAttribute('data-day') !== today })
+      card.addEventListener('click', function (event) {
+        if (event.defaultPrevented || event.target.closest('a, button, form, input, label')) return
+        card.querySelector('a.card-link').click()
+      })
+    })
     window.addEventListener('popstate', applyScreen)
     window.addEventListener('hashchange', applyScreen)
     applyScreen()
@@ -703,7 +705,7 @@ export const badgePath = '/badge'
 
 export type HomePage =
   | Extract<Viewer, { state: 'signed_out' }>
-  | { state: 'signed_in'; account: Account; groups: readonly HomeGroup[]; heatmaps: readonly Heatmap[]; browser: Browser }
+  | { state: 'signed_in'; account: Account; cards: readonly HomeCard[]; browser: Browser }
 
 export type GroupRoute =
   | { kind: 'new' }
@@ -812,18 +814,6 @@ export function safeReturnPath(raw: string | null): string {
   return '/'
 }
 
-function homeGroups(groups: readonly HomeGroup[]): string {
-  if (groups.length === 0) return '<p>You are not in a challenge yet.</p>'
-  const items = groups
-    .map((group) => {
-      const href = escapeHtml(groupHref(group.groupId))
-      const name = escapeHtml(group.label)
-      return `<li><a href="${href}"><span class="group-name">${name}</span><span class="count">${activeCountText(group.activeCount)}</span><span class="chevron" aria-hidden="true">›</span></a></li>`
-    })
-    .join('')
-  return `<p class="section-title">Your challenges</p><ul class="groups">${items}</ul>`
-}
-
 const WEEKDAY_LABELS = ['', 'Mon', '', 'Wed', '', 'Fri', ''] as const
 
 function dayCell(marked: MarkedDay): string {
@@ -850,17 +840,16 @@ function calendarGrid(calendar: GroupCalendar): string {
   return `${title}<div class="grid-scroll"><table class="grid calendar"><thead><tr><td></td>${head}</tr></thead><tbody>${rows}</tbody></table></div>`
 }
 
-function heatmapGrid(heatmap: Heatmap): string {
-  const title = `<p class="grid-title">${escapeHtml(heatmap.name)}</p>`
-  if (heatmap.weeks.length === 0) return `${title}${notStartedNote(heatmap.startsOn)}`
+function heatmapGrid(groupId: GroupId, weeks: readonly HeatmapWeek[]): string {
+  if (weeks.length === 0) return ''
   const rows = WEEKDAY_LABELS.map((label, weekday) => {
-    const cells = heatmap.weeks.map((week) => {
+    const cells = weeks.map((week) => {
       const marked = week[weekday]
       return marked ? dayCell(marked) : '<td></td>'
     })
     return `<tr data-weekday="${weekday}"><th scope="row">${label}</th>${cells.join('')}</tr>`
   }).join('')
-  return `${title}<div class="grid-scroll"><table class="grid heatmap" data-group="${escapeHtml(heatmap.groupId)}"><tbody>${rows}</tbody></table></div>`
+  return `<div class="grid-scroll"><table class="grid heatmap" data-group="${escapeHtml(groupId)}"><tbody>${rows}</tbody></table></div>`
 }
 
 function badgeCircle(badge: Badge): string {
@@ -888,15 +877,61 @@ function rowItem(member: RowMember): string {
   return `<li data-member="${escapeHtml(member.userId)}" data-standing="${kind}">${item}</li>`
 }
 
-function standingsRow(heatmap: Heatmap): string {
-  if (!heatmap.members) return ''
-  const started = heatmap.members.some((member) => member.standing !== null)
-  const label = `${started ? 'Standing in' : 'Members of'} ${heatmap.name}`
-  return `<ul class="standings" aria-label="${escapeHtml(label)}" data-group="${escapeHtml(heatmap.groupId)}">${heatmap.members.map(rowItem).join('')}</ul>`
+function standingsRow(card: HomeCard, members: readonly RowMember[] | null): string {
+  if (!members) return ''
+  const started = members.some((member) => member.standing !== null)
+  const label = `${started ? 'Standing in' : 'Members of'} ${card.name}`
+  return `<ul class="standings" aria-label="${escapeHtml(label)}" data-group="${escapeHtml(card.groupId)}">${members.map(rowItem).join('')}</ul>`
 }
 
-function heatmapBlock(heatmap: Heatmap): string {
-  return `${heatmapGrid(heatmap)}${standingsRow(heatmap)}`
+function dayLog(groupId: GroupId, day: string): string {
+  const action = escapeHtml(`${groupHref(groupId)}${checkInSuffix}`)
+  return `<form class="card-log" method="post" action="${action}">
+          <input type="hidden" name="day" value="${escapeHtml(day)}">
+          <input type="hidden" name="return" value="/">
+          <div class="check-in-colors">
+            <button type="submit" class="green" name="color" value="green">Kept it</button>
+            <button type="submit" class="red" name="color" value="red">Missed it</button>
+          </div>
+        </form>`
+}
+
+function dayBody(groupId: GroupId, line: DayLine, startsOn: string): string {
+  const when = escapeHtml(startsOn)
+  if (line.status === 'before_start') return `<p class="today-status">Starts on <time datetime="${when}">${when}</time></p>`
+  if (line.status === 'due') return `<p class="today-status">Today is due</p>${dayLog(groupId, line.day)}`
+  if (line.status === 'kept') return '<p class="today-status kept">Kept today ✓</p>'
+  if (line.status === 'missed') return '<p class="today-status missed">Missed today</p>'
+  return ''
+}
+
+// Every candidate day is in the page; the screen script shows the one that is today on the phone's clock.
+function todayBlock(card: HomeCard, challenge: HomeChallenge): string {
+  if (challenge.phase === 'draft') return '<p class="today-status">Not started</p>'
+  return challenge.days
+    .map((line) => {
+      const hidden = line.day === challenge.today ? '' : ' hidden'
+      return `<div class="today" data-day="${escapeHtml(line.day)}"${hidden}>${dayBody(card.groupId, line, challenge.startsOn)}</div>`
+    })
+    .join('')
+}
+
+function homeCard(card: HomeCard): string {
+  const { challenge } = card
+  const body =
+    challenge.phase === 'active'
+      ? `${heatmapGrid(card.groupId, challenge.weeks)}${standingsRow(card, challenge.members)}`
+      : ''
+  return `<article class="card challenge-card" data-group="${escapeHtml(card.groupId)}">
+        <h3><a class="card-link" href="${escapeHtml(groupHref(card.groupId))}">${escapeHtml(card.name)}</a></h3>
+        ${todayBlock(card, challenge)}
+        ${body}
+      </article>`
+}
+
+function homeCards(cards: readonly HomeCard[]): string {
+  if (cards.length === 0) return '<p class="home-empty">You are not in a challenge yet. Make one and invite up to 4 friends, or go solo.</p>'
+  return cards.map(homeCard).join('')
 }
 
 function signedOutScreens(viewer: SignedOut): string {
@@ -920,22 +955,15 @@ function signedOutScreens(viewer: SignedOut): string {
 }
 
 function signedInScreens(page: Extract<HomePage, { state: 'signed_in' }>): string {
-  const { account, groups, heatmaps, browser } = page
+  const { account, cards, browser } = page
   const name = escapeHtml(account.displayName)
   const email = escapeHtml(account.email)
   return `
     <section id="home" class="screen">
       ${browser.iosInstall ? installCard(browser.iosInstall) : ''}
-      <article class="card">
-        <h2>Hello, ${name}</h2>
-        ${homeGroups(groups)}
-        ${heatmaps.map(heatmapBlock).join('')}
-        <div class="new-group">
-          <p class="section-title">Start something new</p>
-          <p class="field-hint">Set the terms, then invite up to 4 friends or go solo.</p>
-          <a class="button" href="${groupsRoot}/new">Create a challenge</a>
-        </div>
-      </article>
+      <h2 class="hello">Hello, ${name}</h2>
+      ${homeCards(cards)}
+      <a class="button new-challenge" href="${groupsRoot}/new">Create a challenge</a>
     </section>
     <section id="account" class="screen">
       <article class="card">

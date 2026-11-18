@@ -9,7 +9,6 @@ import {
   type Rhythm,
 } from './challenge.ts'
 import type { CheckInColor } from './checkins.ts'
-import type { GroupId } from './groups.ts'
 
 export const DAY_MARK_LABELS = {
   green: 'Kept it',
@@ -45,15 +44,6 @@ export type RowMember = {
   readonly standing: Standing | null
 }
 
-// members is null for a solo challenge, whose stakes go to a cause.
-export type Heatmap = {
-  readonly groupId: GroupId
-  readonly name: string
-  readonly startsOn: IsoDate
-  readonly weeks: readonly HeatmapWeek[]
-  readonly members: readonly RowMember[] | null
-}
-
 export type CalendarSpan = {
   readonly window: ChallengeWindow
   readonly today: IsoDate
@@ -87,7 +77,7 @@ function isoFrom(utc: Date): IsoDate {
   return parsed
 }
 
-function addDays(day: IsoDate, count: number): IsoDate {
+export function addDays(day: IsoDate, count: number): IsoDate {
   return isoFrom(new Date(utcDate(day).getTime() + count * MS_PER_DAY))
 }
 

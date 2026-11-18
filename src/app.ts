@@ -15,11 +15,11 @@ import {
   type RhythmInput,
 } from './challenge.ts'
 import { utcToday } from './calendar.ts'
-import { listHeatmaps } from './heatmaps.ts'
+import { listHomeCards } from './home.ts'
 import type { IsoDate } from './challenge.ts'
 import { logCheckIn, type CheckInInput } from './checkins.ts'
 import { recordDropout, type DropoutFailure, type DropoutInput } from './dropouts.ts'
-import { deleteGroup, dropGroupName, joinGroup, listHomeGroups, type GroupId } from './groups.ts'
+import { deleteGroup, dropGroupName, joinGroup, type GroupId } from './groups.ts'
 import { loadGroupPage, type GroupPage } from './grouppage.ts'
 import { readBrowser } from './browser.ts'
 import { installAssets, OFFLINE_PATH } from './install.ts'
@@ -134,8 +134,7 @@ export function createApp(deps: AppDeps) {
                 {
                   state: 'signed_in',
                   account: viewer.account,
-                  groups: await listHomeGroups(deps.db, viewer.account),
-                  heatmaps: await listHeatmaps(deps.db, viewer.account, today(deps)),
+                  cards: await listHomeCards(deps.db, viewer.account, today(deps)),
                   browser: readBrowser(req.headers['user-agent']),
                 },
                 toast.text,
@@ -462,7 +461,8 @@ async function postCheckIn(
   const input: CheckInInput = { day: form.get('day') ?? '', color: form.get('color') ?? '' }
   const logged = await logCheckIn(deps.db, viewer.account, groupId, input, today(deps))
   if (logged.ok) {
-    sendRedirect(res, groupHref(groupId), [toastCookie(checkInToast(logged.day, logged.color, logged.previous))], 303)
+    const back = form.get('return') === '/' ? '/' : groupHref(groupId)
+    sendRedirect(res, back, [toastCookie(checkInToast(logged.day, logged.color, logged.previous))], 303)
     return
   }
   if (logged.failure === 'group_missing') {
