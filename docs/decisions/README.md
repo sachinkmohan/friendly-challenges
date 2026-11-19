@@ -17,3 +17,4 @@ These records follow the template at <https://kcd-slides-bwk-adrs-for-agents.pag
 - [0013 We will count members from the start date and stop logging at tomorrow](0013-count-members-from-the-start-date.md). Accepted.
 - [0014 We will create a challenge in one step, with no group name](0014-name-the-challenge-not-the-group.md). Accepted.
 - [0015 We will make the app installable as a web app](0015-install-as-a-web-app.md). Accepted.
+- [0016 We will put today first on a started challenge's page and fold the rest](0016-put-today-first-and-fold-the-rest.md). Accepted.

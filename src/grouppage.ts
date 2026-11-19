@@ -1,4 +1,5 @@
-import { ledgerFrom, paymentUserIds, type Ledger } from './balances.ts'
+import { ledgerFrom, membersFrom, paymentUserIds, type Ledger } from './balances.ts'
+import { aroundToday, type DayLine } from './calendar.ts'
 import { challengeHeadlineFrom, memberChallengeFrom, type ChallengeHeadline, type IsoDate, type MemberChallengeCard } from './challenge.ts'
 import { checkInsFrom, type CheckIn } from './checkins.ts'
 import type { Database } from './db.ts'
@@ -21,6 +22,8 @@ export type MemberView = Extract<GroupView, { kind: 'members' }> & {
   readonly challenge: MemberChallengeCard
   readonly checkIns: readonly CheckIn[]
   readonly ledger: Ledger | null
+  readonly today: IsoDate
+  readonly days: readonly DayLine[]
 }
 
 /** Every section of one group page, built from one read of the group document. */
@@ -81,5 +84,12 @@ function pageFrom(data: GroupData, account: Account | null, today: IsoDate): Exc
   if (!account || !data.card) throw new Error('member page')
   const checkIns = data.activity.read ? checkInsFrom(data.activity.checkIns, data.users) : []
   const ledger = data.activity.read ? ledgerFrom(data.group, data.activity, data.users, today) : null
-  return { kind: 'member', account, view: { ...view, challenge: data.card, checkIns, ledger } }
+  return { kind: 'member', account, view: { ...view, challenge: data.card, checkIns, ledger, today, days: viewerDays(data, account, today) } }
+}
+
+function viewerDays(data: GroupData, account: Account, today: IsoDate): readonly DayLine[] {
+  if (!data.activity.read || data.card?.phase !== 'active') return []
+  const { startsOn, endsOn } = data.card.terms
+  const viewer = membersFrom(data.group, data.activity.checkIns, data.users).find((member) => member.userId === account.id)
+  return viewer ? aroundToday({ phase: 'active', startsOn, endsOn }, viewer, today) : []
 }
