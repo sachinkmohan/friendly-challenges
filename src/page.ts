@@ -314,8 +314,8 @@ const frame = (screens: string, head: PageHead, toast: string | null = null) => 
     .today-area .today-status.kept { color: #2f7d4a; }
     .today-area .today-status.missed { color: #b3392f; }
     .today-log button { min-height: 64px; font-size: 18px; }
-    details > summary { display: flex; align-items: center; min-height: 48px; cursor: pointer; list-style: none; touch-action: manipulation; }
-    details > summary::-webkit-details-marker { display: none; }
+    details.fold > summary, details.change > summary, details.other-day > summary { display: flex; align-items: center; min-height: 48px; cursor: pointer; list-style: none; touch-action: manipulation; }
+    details.fold > summary::-webkit-details-marker, details.change > summary::-webkit-details-marker, details.other-day > summary::-webkit-details-marker { display: none; }
     details.change > summary, details.other-day > summary { font-weight: 650; color: #1c1915; text-decoration: underline; text-underline-offset: 3px; }
     details.fold { margin-top: 0; border-top: 1px solid #e7e0d4; }
     .calendar-block + details.fold { margin-top: 16px; }
@@ -1306,7 +1306,7 @@ function paymentFields(ledger: Ledger, draft: PaymentInput | undefined, refLabel
 
 function paymentForm(groupId: GroupId, ledger: GroupLedger, userId: string, draft: PaymentInput | undefined, error: string): string {
   const others = ledger.people.filter((person) => person.userId !== userId)
-  if (others.length === 0) return ''
+  if (others.length === 0) return error
   const action = escapeHtml(`${groupHref(groupId)}${paymentSuffix}`)
   const payees = optionList(
     others.map((person) => ({ value: person.userId, label: person.displayName })),
@@ -1549,10 +1549,13 @@ function todayBody(groupId: GroupId, line: DayLine, challenge: ActiveChallenge):
 }
 
 function todaySection(view: MemberView, challenge: ActiveChallenge, userId: string, attempt: ChallengeAttempt | undefined): string {
-  const error = formError(attempt?.failure && challengeFailureCopy[attempt.failure])
+  const challengeFailure = attempt?.failure ?? attempt?.startFailure
+  const error = formError(challengeFailure && challengeFailureCopy[challengeFailure])
+  const failed = attempt?.checkInFailure
+  const checkInError = formError(failed && checkInFailureCopy[failed])
   if (rhythmSlot('active', challenge.rhythms, userId).mode !== 'locked') {
     const form = rhythmForm(view.groupId, attempt?.rhythmDraft?.interval ?? '', 'Pick your rhythm to start logging')
-    return `<section class="today-area">${error}${form}</section>`
+    return `<section class="today-area">${error}${checkInError}${form}</section>`
   }
   const days = view.days
     .map((line) => {
@@ -1560,10 +1563,9 @@ function todaySection(view: MemberView, challenge: ActiveChallenge, userId: stri
       return `<div class="today" data-day="${escapeHtml(line.day)}"${hidden}>${todayBody(view.groupId, line, challenge)}</div>`
     })
     .join('')
-  const failed = attempt?.checkInFailure
   const other = `<details class="other-day"${failed ? ' open' : ''}>
         <summary>Log a different day</summary>
-        ${formError(failed && checkInFailureCopy[failed])}
+        ${checkInError}
         ${checkInControl(view.groupId, challenge, attempt?.checkInDay)}
       </details>`
   return `<section class="today-area" data-days>${error}${days}${other}</section>`
@@ -1594,9 +1596,8 @@ function startedPage(view: MemberView, challenge: ActiveChallenge, viewer: Viewe
   const dropout = attempt?.dropoutFailure
   const deletion = attempt?.deleteFailure
   const dropName = attempt?.dropNameFailure
-  const money = view.ledger
-    ? balancesSection(view.groupId, view.ledger, userId, attempt?.paymentDraft, formError(payment && paymentFailureCopy[payment]))
-    : ''
+  const paymentError = formError(payment && paymentFailureCopy[payment])
+  const money = view.ledger ? balancesSection(view.groupId, view.ledger, userId, attempt?.paymentDraft, paymentError) : paymentError
   const members = `<ul class="members">${view.members.map((member) => memberRow(member, challenge.rhythms)).join('')}</ul>
       <p class="share">Share this link to invite someone. <a href="${share}">${share}</a></p>`
   const manage = `${dropNameForm(view, challenge, userId, formError(dropName && dropNameFailureCopy[dropName]))}

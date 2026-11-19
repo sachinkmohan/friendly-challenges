@@ -144,6 +144,15 @@ test('a failed form opens its own row and shows the error next to the form', asy
   })
 })
 
+test('a member who is not the creator and presses Start is told why at the top of today', async () => {
+  await withCrew(async ({ grace, send }) => {
+    const refused = await send(grace, '/challenge/start', {})
+    assert.equal(refused.status, 403)
+    const area = between(await refused.text(), '<section class="today-area" data-days>', '<details class="other-day"')
+    assert.match(area, /class="form-error" role="alert"/)
+  })
+})
+
 test('Members lists each badge and rhythm, and History lists the check-ins', async () => {
   await withCrew(async ({ ada, grace, page, send }) => {
     assert.match(fold(await page(ada), 'history'), /No check-ins yet\./)
@@ -158,7 +167,7 @@ test('Members lists each badge and rhythm, and History lists the check-ins', asy
 })
 
 test('someone who joins after the start picks a rhythm where the log buttons would be', async () => {
-  await withCrew(async ({ db, groupId, page }) => {
+  await withCrew(async ({ db, groupId, base, page }) => {
     const lin = await person(db, 'Lin')
     const joined = await joinGroup(db, lin, groupId)
     if (!joined.ok) throw new Error(joined.failure)
@@ -166,5 +175,9 @@ test('someone who joins after the start picks a rhythm where the log buttons wou
     const area = between(html, '<section class="today-area">', '</section>')
     assert.match(area, /Pick your rhythm to start logging/)
     assert.doesNotMatch(area, /Kept it|Log a different day/)
+
+    const refused = await post(base, `/groups/${groupId}/check-in`, await cookieFor(db, lin), new URLSearchParams({ day: '2026-11-04', color: 'green' }).toString())
+    const shown = between(await refused.text(), '<section class="today-area">', '</section>')
+    assert.match(shown, /class="form-error" role="alert"/, 'a refused log still says why')
   })
 })
