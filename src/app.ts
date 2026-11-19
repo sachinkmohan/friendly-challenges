@@ -19,7 +19,7 @@ import { listHomeCards } from './home.ts'
 import type { IsoDate } from './challenge.ts'
 import { logCheckIn, type CheckInInput } from './checkins.ts'
 import { recordDropout, type DropoutFailure, type DropoutInput } from './dropouts.ts'
-import { deleteGroup, dropGroupName, joinGroup, type GroupId } from './groups.ts'
+import { deleteGroup, dropGroupName, joinGroup, lastCurrencyOf, type GroupId } from './groups.ts'
 import { loadGroupPage, type GroupPage } from './grouppage.ts'
 import { readBrowser } from './browser.ts'
 import { installAssets, OFFLINE_PATH } from './install.ts'
@@ -248,7 +248,8 @@ async function handleGroup(
   const viewer = await viewerFrom(req, deps)
   if (route.kind === 'new') {
     if (method !== 'GET') return rejectMethod(res, 'GET')
-    sendHtml(res, 200, renderNewChallenge(viewer))
+    const lastCurrency = viewer.state === 'signed_out' ? null : await lastCurrencyOf(deps.db, viewer.account)
+    sendHtml(res, 200, renderNewChallenge(viewer, { kind: 'blank', lastCurrency }))
     return
   }
   if (route.kind === 'create') {
@@ -268,7 +269,7 @@ async function handleGroup(
     }
     const created = await createChallenge(deps.db, viewer.account, input)
     if (!created.ok) {
-      sendHtml(res, 400, renderNewChallenge(viewer, created.failure, input))
+      sendHtml(res, 400, renderNewChallenge(viewer, { kind: 'refused', failure: created.failure, draft: input }))
       return
     }
     sendRedirect(res, groupHref(created.groupId), [toastCookie({ kind: 'created', group: created.label })], 303)

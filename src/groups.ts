@@ -1,6 +1,6 @@
 import { badgeOf, type Badge } from './badges.ts'
 import type { Database } from './db.ts'
-import { ACTIVE_MEMBER_CAP, activeMemberIds, compare, groupRef, labelOf, memberOf, readGroup, utcToday, type GroupDoc, type UserDoc } from './store.ts'
+import { ACTIVE_MEMBER_CAP, activeMemberIds, compare, groupRef, labelOf, memberOf, parseGroup, readGroup, utcToday, type ChallengeDoc, type GroupDoc, type UserDoc } from './store.ts'
 import type { Account } from './identity.ts'
 
 export type GroupId = string & { readonly brand: 'GroupId' }
@@ -132,6 +132,17 @@ export async function dropGroupName(db: Database, actor: Account, groupId: Group
     return { label: group.challenge.name }
   })
   return 'failure' in outcome ? { ok: false, failure: outcome.failure } : { ok: true, label: outcome.label }
+}
+
+// Groups carry no creation time, so the latest start date stands in for the most recent challenge.
+export async function lastCurrencyOf(db: Database, account: Account): Promise<string | null> {
+  const snapshot = await db.collection('groups').where('createdBy', '==', account.id).get()
+  const challenges = snapshot.docs.flatMap((doc) => {
+    const challenge = parseGroup(doc.data()).challenge
+    return challenge ? [challenge] : []
+  })
+  const latest = challenges.reduce<ChallengeDoc | null>((best, next) => (!best || next.startsOn > best.startsOn ? next : best), null)
+  return latest?.currency ?? null
 }
 
 /** users must hold every active member when the viewer is one of them. */

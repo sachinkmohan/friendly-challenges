@@ -240,6 +240,31 @@ test('a bad field re-draws the create form with what was typed and creates nothi
   }
 })
 
+test('the create form groups its fields under three headings and picks the currency of your latest challenge', async () => {
+  const db = openTestDatabase()
+  const ada = await sessionFor(db, 'Ada')
+  const bo = await sessionFor(db, 'Bo')
+  const { server, base } = await listen(db)
+  const formFor = async (who: Person) => (await fetch(`${base}/groups/new`, { headers: { cookie: who.cookie } })).text()
+  const create = (fields: Record<string, string>) => postForm(base, '/groups', ada.cookie, createForm(fields))
+  try {
+    const first = await formFor(ada)
+    assert.deepEqual([...first.matchAll(/<legend>([^<]+)<\/legend>/g)].map((m) => m[1]), ['The habit', 'The stake', 'The dates'])
+    assert.doesNotMatch(first, /<option value="[A-Z]{3}" selected>/, 'no currency picked before any challenge')
+    assert.match(first, /<div id="custom-type-field">[^]*?name="custom_label"/)
+
+    assert.equal((await create({ currency: 'EUR', starts_on: '2026-12-01', ends_on: '2026-12-31' })).status, 303)
+    assert.equal((await create({ currency: 'GBP', starts_on: '2026-11-01', ends_on: '2026-11-30' })).status, 303)
+    assert.match(await formFor(ada), /<option value="EUR" selected>/, 'latest start date wins')
+    assert.doesNotMatch(await formFor(bo), /<option value="[A-Z]{3}" selected>/, 'another creator\'s currency is not used')
+
+    const refused = await create({ name: '', currency: 'GBP' })
+    assert.match(await refused.text(), /<option value="GBP" selected>/, 'a refused form keeps the typed currency')
+  } finally {
+    await close(server, db)
+  }
+})
+
 test('Solo stores the cause on the draft, and a cause typed with Solo off is dropped', async () => {
   const db = openTestDatabase()
   const ada = await sessionFor(db, 'Ada')
