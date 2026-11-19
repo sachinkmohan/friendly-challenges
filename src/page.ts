@@ -218,6 +218,9 @@ const frame = (screens: string, head: PageHead, toast: string | null = null) => 
       min-height: 48px;
     }
     .section-title { margin-top: 16px; font-weight: 650; color: #1c1915; }
+    fieldset { margin: 24px 0 0; padding: 0; border: 0; min-width: 0; }
+    legend { padding: 0; font-size: 17px; font-weight: 650; color: #1c1915; }
+    legend + label { margin-top: 8px; }
     .hello { margin: 4px 4px 12px; }
     .challenge-card { cursor: pointer; }
     .challenge-card + .challenge-card { margin-top: 12px; }
@@ -1150,21 +1153,46 @@ function termsText(terms: ChallengeTerms, minorDigits: number, stakesGo: StakesG
     ${stakesGoText(stakesGo)}`
 }
 
-function termsFields(currencies: readonly string[], values: TermValues): string {
-  return `<label for="challenge-name">Challenge name</label>
-      <input id="challenge-name" name="name" value="${escapeHtml(values.name)}" autocomplete="off">
-      <label for="challenge-type">Type</label>
-      <select id="challenge-type" name="type">${typeOptions(values.type)}</select>
-      <label for="challenge-custom">Custom type</label>
-      <input id="challenge-custom" name="custom_label" value="${escapeHtml(values.customLabel)}" autocomplete="off">
-      <label for="challenge-currency">Currency</label>
-      <select id="challenge-currency" name="currency">${currencyOptions(currencies, values.currency)}</select>
-      <label for="challenge-stake">Stake per day</label>
-      <input id="challenge-stake" name="stake" value="${escapeHtml(values.stake)}" inputmode="decimal" autocomplete="off">
-      <label for="challenge-start">Start date</label>
-      <input id="challenge-start" name="starts_on" type="date" value="${escapeHtml(values.startsOn)}">
-      <label for="challenge-end">End date</label>
-      <input id="challenge-end" name="ends_on" type="date" value="${escapeHtml(values.endsOn)}">`
+type FieldSlots = { habit: string; stake: string }
+
+function termsFields(currencies: readonly string[], values: TermValues, slots: FieldSlots = { habit: '', stake: '' }): string {
+  return `<fieldset>
+        <legend>The habit</legend>
+        <label for="challenge-name">Challenge name</label>
+        <input id="challenge-name" name="name" value="${escapeHtml(values.name)}" autocomplete="off">
+        <label for="challenge-type">Type</label>
+        <select id="challenge-type" name="type">${typeOptions(values.type)}</select>
+        <div id="custom-type-field">
+          <label for="challenge-custom">Custom type</label>
+          <input id="challenge-custom" name="custom_label" value="${escapeHtml(values.customLabel)}" autocomplete="off">
+        </div>
+        ${slots.habit}
+      </fieldset>
+      <fieldset>
+        <legend>The stake</legend>
+        <label for="challenge-stake">Stake per day</label>
+        <input id="challenge-stake" name="stake" value="${escapeHtml(values.stake)}" inputmode="decimal" autocomplete="off">
+        <label for="challenge-currency">Currency</label>
+        <select id="challenge-currency" name="currency">${currencyOptions(currencies, values.currency)}</select>
+        ${slots.stake}
+      </fieldset>
+      <fieldset>
+        <legend>The dates</legend>
+        <label for="challenge-start">Start date</label>
+        <input id="challenge-start" name="starts_on" type="date" value="${escapeHtml(values.startsOn)}">
+        <label for="challenge-end">End date</label>
+        <input id="challenge-end" name="ends_on" type="date" value="${escapeHtml(values.endsOn)}">
+      </fieldset>
+      <script>
+        (function () {
+          var type = document.getElementById('challenge-type')
+          var custom = document.getElementById('custom-type-field')
+          if (!type || !custom) return
+          var sync = function () { custom.hidden = type.value !== 'custom' }
+          type.addEventListener('change', sync)
+          sync()
+        })()
+      </script>`
 }
 
 function termsForm(groupId: GroupId, currencies: readonly string[], values: TermValues): string {
@@ -1175,33 +1203,44 @@ function termsForm(groupId: GroupId, currencies: readonly string[], values: Term
     </form>`
 }
 
-export function renderNewChallenge(viewer: Viewer, failure?: CreateChallengeFailure, draft?: CreateChallengeInput): string {
+export type NewChallengeForm =
+  | { kind: 'blank'; lastCurrency: string | null }
+  | { kind: 'refused'; failure: CreateChallengeFailure; draft: CreateChallengeInput }
+
+export function renderNewChallenge(viewer: Viewer, form: NewChallengeForm = { kind: 'blank', lastCurrency: null }): string {
   if (viewer.state === 'signed_out') {
     return groupCard('New challenge', `
       <p>Sign in to create a challenge.</p>
       ${signInControl(viewer, `${groupsRoot}/new`)}
     `)
   }
-  const message = failure ? `<p class="start-error" role="alert">${escapeHtml(challengeFailureCopy[failure])}</p>` : ''
-  const values = draft ? termsFromDraft(draft) : emptyTerms
+  const draft = form.kind === 'refused' ? form.draft : undefined
+  const message = form.kind === 'refused' ? `<p class="start-error" role="alert">${escapeHtml(challengeFailureCopy[form.failure])}</p>` : ''
+  const values = draft ? termsFromDraft(draft) : { ...emptyTerms, currency: form.kind === 'blank' ? form.lastCurrency ?? '' : '' }
   const solo = draft?.solo ? ' checked' : ''
+  const habit = `<label for="rhythm-interval">How often you log</label>
+        <select id="rhythm-interval" name="interval">${intervalOptions(draft?.interval ?? '')}</select>`
+  const stake = `<label class="confirm"><input type="checkbox" id="challenge-solo" name="solo" value="yes"${solo}> Solo: just me, nobody can join</label>
+        <div id="cause-field">
+          <label for="challenge-cause">Who your missed days are owed to</label>
+          <input id="challenge-cause" name="cause" value="${escapeHtml(draft?.cause ?? '')}" autocomplete="off">
+          <p class="field-hint">Only for a solo challenge. You pay this cause yourself, outside the app.</p>
+        </div>`
   return groupCard('New challenge', `
     <p>Set the terms and how often you log. Invite friends from the challenge page, or make it solo.</p>
     ${message}
     <form method="post" action="${groupsRoot}">
-      ${termsFields(CURRENCY_CODES, values)}
-      <label for="rhythm-interval">How often you log</label>
-      <select id="rhythm-interval" name="interval">${intervalOptions(draft?.interval ?? '')}</select>
-      <label class="confirm"><input type="checkbox" id="challenge-solo" name="solo" value="yes"${solo}> Solo: just me, nobody can join</label>
-      <div id="cause-field">
-        <label for="challenge-cause">Who your missed days are owed to</label>
-        <input id="challenge-cause" name="cause" value="${escapeHtml(draft?.cause ?? '')}" autocomplete="off">
-        <p class="field-hint">Only for a solo challenge. You pay this cause yourself, outside the app.</p>
-      </div>
+      ${termsFields(CURRENCY_CODES, values, { habit, stake })}
       <button type="submit">Create challenge</button>
     </form>
     <script>
       (function () {
+        var start = document.getElementById('challenge-start')
+        if (start && !start.value) {
+          var now = new Date()
+          var pad = function (n) { return String(n).padStart(2, '0') }
+          start.value = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate())
+        }
         var solo = document.getElementById('challenge-solo')
         var cause = document.getElementById('cause-field')
         if (!solo || !cause) return
