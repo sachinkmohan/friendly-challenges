@@ -23,7 +23,6 @@ import {
   type CreateChallengeInput,
   type CreateChallengeResult,
   type MemberChallengeCard,
-  type Rhythm,
   type RhythmInput,
   type RhythmLine,
   type StakesGo,
@@ -32,10 +31,11 @@ import {
 } from './challenge.ts'
 import { CURRENCY_CODES } from './currencies.ts'
 import { BADGE_EMOJIS, type Badge, type BadgeEmoji } from './badges.ts'
-import { DAY_MARK_LABELS, type GroupCalendar, type HeatmapWeek, type MarkedDay, type RowMember } from './calendar.ts'
-import type { DayLine, HomeCard, HomeChallenge } from './home.ts'
+import { DAY_MARK_LABELS, type DayLine, type GroupCalendar, type HeatmapWeek, type MarkedDay, type RowMember } from './calendar.ts'
+import type { HomeCard, HomeChallenge } from './home.ts'
+import type { MemberView, OutsiderView } from './grouppage.ts'
 import { dropoutFailureCopy, type DropoutFailure, type DropoutInput } from './dropouts.ts'
-import { CHECK_IN_LABELS, checkInFailureCopy, type CheckIn, type CheckInFailure } from './checkins.ts'
+import { CHECK_IN_LABELS, checkInFailureCopy, type CheckIn, type CheckInColor, type CheckInFailure } from './checkins.ts'
 import { deleteFailureCopy, dropNameFailureCopy, parseGroupId, type DeleteFailure, type DropNameFailure, type GroupId, type GroupView, type MemberLine } from './groups.ts'
 import type { Browser, Os } from './browser.ts'
 import { authFailureCopy, type Account, type AuthFailure, type Viewer } from './identity.ts'
@@ -307,7 +307,23 @@ const frame = (screens: string, head: PageHead, toast: string | null = null) => 
     .start-steps li[data-done="true"] .mark { color: #2f7d4a; }
     #start { scroll-margin-top: 72px; }
     #start .field-hint { margin-top: 8px; }
-    .start-error { margin-top: 8px; color: #b3392f; font-weight: 650; }
+    .start-error, .form-error { margin-top: 8px; color: #b3392f; font-weight: 650; }
+    .terms-line { font-size: 14px; }
+    .today-area { margin-top: 16px; }
+    .today-area .today-status { font-size: 18px; font-weight: 650; color: #1c1915; }
+    .today-area .today-status.kept { color: #2f7d4a; }
+    .today-area .today-status.missed { color: #b3392f; }
+    .today-log button { min-height: 64px; font-size: 18px; }
+    details.fold > summary, details.change > summary, details.other-day > summary { display: flex; align-items: center; min-height: 48px; cursor: pointer; list-style: none; touch-action: manipulation; }
+    details.fold > summary::-webkit-details-marker, details.change > summary::-webkit-details-marker, details.other-day > summary::-webkit-details-marker { display: none; }
+    details.change > summary, details.other-day > summary { font-weight: 650; color: #1c1915; text-decoration: underline; text-underline-offset: 3px; }
+    details.fold { margin-top: 0; border-top: 1px solid #e7e0d4; }
+    .calendar-block + details.fold { margin-top: 16px; }
+    details.fold > summary { justify-content: space-between; font-weight: 650; color: #1c1915; }
+    details.fold > summary::after { content: '›'; color: #8a8378; font-size: 22px; line-height: 1; transition: transform 150ms; }
+    details.fold[open] > summary::after { transform: rotate(90deg); }
+    .fold-body { padding-bottom: 16px; }
+    .fold-body > :first-child, .fold-body > form:first-child > :first-child { margin-top: 0; }
     .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     .who { display: flex; gap: 12px; align-items: center; }
     .who img, .avatar {
@@ -529,13 +545,15 @@ const frame = (screens: string, head: PageHead, toast: string | null = null) => 
         applyScreen()
       })
     })
-    document.querySelectorAll('.challenge-card').forEach(function (card) {
+    document.querySelectorAll('[data-days]').forEach(function (box) {
       var now = new Date()
       var pad = function (n) { return String(n).padStart(2, '0') }
       var today = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate())
-      var lines = card.querySelectorAll('.today[data-day]')
+      var lines = box.querySelectorAll('.today[data-day]')
       var match = Array.prototype.some.call(lines, function (line) { return line.getAttribute('data-day') === today })
       if (match) lines.forEach(function (line) { line.hidden = line.getAttribute('data-day') !== today })
+    })
+    document.querySelectorAll('.challenge-card').forEach(function (card) {
       card.addEventListener('click', function (event) {
         if (event.defaultPrevented || event.target.closest('a, button, form, input, label')) return
         if (String(window.getSelection())) return
@@ -925,7 +943,7 @@ function homeCard(card: HomeCard): string {
     challenge.phase === 'active'
       ? `${heatmapGrid(card.groupId, challenge.weeks)}${standingsRow(card, challenge.members)}`
       : ''
-  return `<article class="card challenge-card" data-group="${escapeHtml(card.groupId)}">
+  return `<article class="card challenge-card" data-group="${escapeHtml(card.groupId)}" data-days>
         <h3><a class="card-link" href="${escapeHtml(groupHref(card.groupId))}">${escapeHtml(card.name)}</a></h3>
         ${todayBlock(card, challenge)}
         ${body}
@@ -1195,9 +1213,8 @@ export function renderNewChallenge(viewer: Viewer, failure?: CreateChallengeFail
   `)
 }
 
-function rhythmText(rhythm: Rhythm): string {
-  return `<p>${escapeHtml(RHYTHM_LABELS[rhythm.kind])}</p>`
-}
+type ActiveChallenge = Extract<MemberChallengeCard, { phase: 'active' }>
+type SetupChallenge = Exclude<MemberChallengeCard, { phase: 'active' }>
 
 function rhythmForm(groupId: GroupId, interval: string, prompt: string): string {
   const action = escapeHtml(`${groupHref(groupId)}/rhythm`)
@@ -1212,26 +1229,16 @@ function rhythmForm(groupId: GroupId, interval: string, prompt: string): string 
 
 function rhythmControl(
   groupId: GroupId,
-  challenge: MemberChallengeCard,
+  challenge: SetupChallenge,
   userId: string,
   posted: RhythmInput | undefined,
 ): string {
   if (challenge.phase === 'unopened') return ''
-  const slot = rhythmSlot(challenge.phase, challenge.rhythms, userId)
-  if (slot.mode === 'locked') return rhythmText(slot.rhythm)
-  const stored = slot.mode === 'open' ? slot.rhythm : null
-  const prompt = slot.mode === 'first' ? 'Pick your rhythm to start logging' : stored ? '' : 'Pick your rhythm'
-  return rhythmForm(groupId, posted?.interval ?? stored?.kind ?? '', prompt)
+  const stored = challenge.rhythms.find((line) => line.userId === userId)
+  return rhythmForm(groupId, posted?.interval ?? stored?.kind ?? '', stored ? '' : 'Pick your rhythm')
 }
 
-function checkInControl(
-  groupId: GroupId,
-  challenge: MemberChallengeCard,
-  userId: string,
-  postedDay: string | undefined,
-): string {
-  if (challenge.phase !== 'active') return ''
-  if (rhythmSlot(challenge.phase, challenge.rhythms, userId).mode !== 'locked') return ''
+function checkInControl(groupId: GroupId, challenge: ActiveChallenge, postedDay: string | undefined): string {
   const action = escapeHtml(`${groupHref(groupId)}${checkInSuffix}`)
   const start = escapeHtml(challenge.terms.startsOn)
   const end = escapeHtml(challenge.terms.endsOn)
@@ -1260,11 +1267,6 @@ function checkInItem(checkIn: CheckIn): string {
   const when = escapeHtml(checkIn.day)
   const label = CHECK_IN_LABELS[checkIn.color]
   return `<li><span class="swatch ${checkIn.color}" aria-hidden="true"></span> <span class="member-name">${escapeHtml(checkIn.displayName)} <time datetime="${when}">${when}</time></span> <span>${label}</span></li>`
-}
-
-function checkInList(checkIns: readonly CheckIn[]): string {
-  if (checkIns.length === 0) return ''
-  return `<p class="check-ins-title">Check-ins</p><ul class="check-ins">${checkIns.map(checkInItem).join('')}</ul>`
 }
 
 function money(ledger: Ledger, minor: number): string {
@@ -1302,9 +1304,9 @@ function paymentFields(ledger: Ledger, draft: PaymentInput | undefined, refLabel
       <button type="submit">Record payment</button>`
 }
 
-function paymentForm(groupId: GroupId, ledger: GroupLedger, userId: string, draft: PaymentInput | undefined): string {
+function paymentForm(groupId: GroupId, ledger: GroupLedger, userId: string, draft: PaymentInput | undefined, error: string): string {
   const others = ledger.people.filter((person) => person.userId !== userId)
-  if (others.length === 0) return ''
+  if (others.length === 0) return error
   const action = escapeHtml(`${groupHref(groupId)}${paymentSuffix}`)
   const payees = optionList(
     others.map((person) => ({ value: person.userId, label: person.displayName })),
@@ -1313,6 +1315,7 @@ function paymentForm(groupId: GroupId, ledger: GroupLedger, userId: string, draf
   return `<form method="post" action="${action}">
       <p class="grid-title">Record a payment you made</p>
       <p>The app does not send money. Record a payment that already happened.</p>
+      ${error}
       <label for="payment-payee">Paid to</label>
       <select id="payment-payee" name="payee">${payees}</select>
       ${paymentFields(ledger, draft, 'PayPal reference')}
@@ -1324,7 +1327,7 @@ function paymentList(ledger: Ledger): string {
   return `<p class="check-ins-title">Payments</p><ul class="check-ins payments">${ledger.payments.map((item) => paymentItem(ledger, item)).join('')}</ul>`
 }
 
-function soloBalances(groupId: GroupId, ledger: SoloLedger, draft: PaymentInput | undefined): string {
+function soloBalances(groupId: GroupId, ledger: SoloLedger, draft: PaymentInput | undefined, error: string): string {
   const name = escapeHtml(ledger.member.displayName)
   const cause = escapeHtml(ledger.cause)
   const amount = escapeHtml(money(ledger, Math.abs(ledger.dueMinor)))
@@ -1337,31 +1340,33 @@ function soloBalances(groupId: GroupId, ledger: SoloLedger, draft: PaymentInput 
       <p class="grid-title">Record a payment you made</p>
       <p>The app does not send money. Record a payment that already happened.</p>
       <p>Paid to ${cause}</p>
+      ${error}
       ${paymentFields(ledger, draft, 'Reference')}
     </form>`
   return `<p class="check-ins-title">Balance</p>${due}${form}${paymentList(ledger)}`
 }
 
-function groupBalances(groupId: GroupId, ledger: GroupLedger, userId: string, draft: PaymentInput | undefined): string {
+function groupBalances(groupId: GroupId, ledger: GroupLedger, userId: string, draft: PaymentInput | undefined, error: string): string {
   const nets = `<ul class="check-ins balances">${ledger.nets.map((line) => netItem(ledger, line)).join('')}</ul>`
   const open =
     ledger.open.length === 0
       ? '<p>Nobody owes anyone.</p>'
       : `<ul class="check-ins open-amounts">${ledger.open.map((line) => openItem(ledger, line)).join('')}</ul>`
-  return `<p class="check-ins-title">Balances</p>${nets}<p class="check-ins-title">Who owes whom</p>${open}${paymentForm(groupId, ledger, userId, draft)}${paymentList(ledger)}`
+  return `<p class="check-ins-title">Balances</p>${nets}<p class="check-ins-title">Who owes whom</p>${open}${paymentForm(groupId, ledger, userId, draft, error)}${paymentList(ledger)}`
 }
 
-function balancesSection(groupId: GroupId, ledger: Ledger, userId: string, draft: PaymentInput | undefined): string {
-  return ledger.kind === 'solo' ? soloBalances(groupId, ledger, draft) : groupBalances(groupId, ledger, userId, draft)
+function balancesSection(groupId: GroupId, ledger: Ledger, userId: string, draft: PaymentInput | undefined, error: string): string {
+  return ledger.kind === 'solo' ? soloBalances(groupId, ledger, draft, error) : groupBalances(groupId, ledger, userId, draft, error)
 }
 
 function dropoutForm(
   view: Extract<GroupView, { kind: 'members' }>,
   userId: string,
   draft: DropoutInput | undefined,
+  error = '',
 ): string {
   const choices = userId === view.creatorId ? view.members : view.members.filter((member) => member.userId === userId)
-  if (choices.length === 0) return ''
+  if (choices.length === 0) return error
   const action = escapeHtml(`${groupHref(view.groupId)}${dropoutSuffix}`)
   const members = optionList(
     choices.map((member) => ({ value: member.userId, label: member.displayName })),
@@ -1370,6 +1375,7 @@ function dropoutForm(
   return `<form method="post" action="${action}">
       <p class="grid-title">Leave or record a dropout</p>
       <p>Debts through the last day stay. Days after it owe nothing.</p>
+      ${error}
       <label for="dropout-member">Member</label>
       <select id="dropout-member" name="member">${members}</select>
       <label for="dropout-day">Last day</label>
@@ -1378,22 +1384,24 @@ function dropoutForm(
     </form>`
 }
 
-function deleteForm(view: Extract<GroupView, { kind: 'members' }>, userId: string): string {
-  if (userId !== view.creatorId) return ''
+function deleteForm(view: Extract<GroupView, { kind: 'members' }>, userId: string, error = ''): string {
+  if (userId !== view.creatorId) return error
   const action = escapeHtml(`${groupHref(view.groupId)}${deleteSuffix}`)
   return `<form method="post" action="${action}">
       <p class="grid-title">Delete this challenge</p>
       <p>This removes the challenge, every check-in, and every payment for everyone. It cannot be undone.</p>
+      ${error}
       <label class="confirm"><input type="checkbox" name="confirm" value="yes" required> Delete it for everyone</label>
       <button type="submit" class="danger">Delete challenge</button>
     </form>`
 }
 
-function dropNameForm(view: Extract<GroupView, { kind: 'members' }>, challenge: MemberChallengeCard, userId: string): string {
-  if (userId !== view.creatorId || !view.hasGroupName || challenge.phase === 'unopened') return ''
+function dropNameForm(view: Extract<GroupView, { kind: 'members' }>, challenge: MemberChallengeCard, userId: string, error = ''): string {
+  if (userId !== view.creatorId || !view.hasGroupName || challenge.phase === 'unopened') return error
   const action = escapeHtml(`${groupHref(view.groupId)}${dropNameSuffix}`)
   return `<form method="post" action="${action}">
       <p class="field-hint">It still shows the name you first gave it. The challenge is called ${escapeHtml(challenge.terms.name)}.</p>
+      ${error}
       <button type="submit" class="secondary">Use the challenge name instead</button>
     </form>`
 }
@@ -1411,7 +1419,7 @@ function startStepItem(step: StartStep, done: boolean, cap: number, missing: rea
 
 function startSection(
   groupId: GroupId,
-  challenge: Exclude<MemberChallengeCard, { phase: 'active' }>,
+  challenge: SetupChallenge,
   creator: Creator,
   missing: readonly string[],
   failure: ChallengeFailure | undefined,
@@ -1441,11 +1449,11 @@ type Creator = { readonly isViewer: boolean; readonly name: string }
 
 function termsBlock(
   groupId: GroupId,
-  challenge: MemberChallengeCard,
+  challenge: SetupChallenge,
   creator: Creator,
   draft: ChallengeInput | undefined,
 ): string {
-  if (creator.isViewer && challenge.phase !== 'active') {
+  if (creator.isViewer) {
     const values = draft
       ? termsFromDraft(draft)
       : challenge.phase === 'draft'
@@ -1478,14 +1486,136 @@ function headlineText(headline: ChallengeHeadline | null): string {
   return termsText(headline.terms, headline.minorDigits, headline.stakesGo)
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const
+
+function friendlyDate(day: string, withYear = false): string {
+  const date = new Date(`${day}T00:00:00Z`)
+  const short = `${date.getUTCDate()}\u00a0${MONTHS[date.getUTCMonth()]}`
+  return withYear ? `${short}\u00a0${date.getUTCFullYear()}` : short
+}
+
+function friendlySpan(startsOn: string, endsOn: string): string {
+  const years = startsOn.slice(0, 4) !== endsOn.slice(0, 4)
+  return `${friendlyDate(startsOn, years)} – ${friendlyDate(endsOn, years)}`
+}
+
+function termsLine(challenge: ActiveChallenge, activeCount: number): string {
+  const { terms, stakesGo } = challenge
+  const parts = [
+    `${formatStake(terms.stakeMinor, challenge.minorDigits)} ${terms.currency} per missed day`,
+    friendlySpan(terms.startsOn, terms.endsOn),
+    activeCountText(activeCount),
+    ...(stakesGo.kind === 'cause' ? [`owed to ${stakesGo.name}`] : []),
+  ]
+  return `<p class="terms-line">${parts.map(escapeHtml).join(' · ')}</p>`
+}
+
+function formError(text: string | undefined): string {
+  return text ? `<p class="form-error" role="alert">${escapeHtml(text)}</p>` : ''
+}
+
+const COLOR_BUTTONS = {
+  green: '<button type="submit" class="green" name="color" value="green">Kept it</button>',
+  red: '<button type="submit" class="red" name="color" value="red">Missed it</button>',
+} as const
+
+function todayLog(groupId: GroupId, day: string, colors: readonly CheckInColor[]): string {
+  const action = escapeHtml(`${groupHref(groupId)}${checkInSuffix}`)
+  return `<form class="today-log" method="post" action="${action}">
+          <input type="hidden" name="day" value="${escapeHtml(day)}">
+          <div class="check-in-colors">${colors.map((color) => COLOR_BUTTONS[color]).join('')}</div>
+        </form>`
+}
+
+function changeFold(groupId: GroupId, day: string, other: CheckInColor): string {
+  return `<details class="change"><summary>Change</summary>${todayLog(groupId, day, [other])}</details>`
+}
+
+function todayBody(groupId: GroupId, line: DayLine, challenge: ActiveChallenge): string {
+  switch (line.status) {
+    case 'before_start':
+      return `<p class="today-status">Starts on ${escapeHtml(friendlyDate(challenge.terms.startsOn))}</p>`
+    case 'after_end':
+      return `<p class="today-status">Ended on ${escapeHtml(friendlyDate(challenge.terms.endsOn))}</p>`
+    case 'due':
+      return `<p class="today-status">Today is due</p>${todayLog(groupId, line.day, ['green', 'red'])}`
+    case 'kept':
+      return `<p class="today-status kept">Today: kept ✓</p>${changeFold(groupId, line.day, 'red')}`
+    case 'missed':
+      return `<p class="today-status missed">Today: missed</p>${changeFold(groupId, line.day, 'green')}`
+    case 'not_due':
+      return '<p class="today-status">Today is not a logging day for you.</p>'
+  }
+}
+
+function todaySection(view: MemberView, challenge: ActiveChallenge, userId: string, attempt: ChallengeAttempt | undefined): string {
+  const challengeFailure = attempt?.failure ?? attempt?.startFailure
+  const error = formError(challengeFailure && challengeFailureCopy[challengeFailure])
+  const failed = attempt?.checkInFailure
+  const checkInError = formError(failed && checkInFailureCopy[failed])
+  if (rhythmSlot('active', challenge.rhythms, userId).mode !== 'locked') {
+    const form = rhythmForm(view.groupId, attempt?.rhythmDraft?.interval ?? '', 'Pick your rhythm to start logging')
+    return `<section class="today-area">${error}${checkInError}${form}</section>`
+  }
+  const days = view.days
+    .map((line) => {
+      const hidden = line.day === view.today ? '' : ' hidden'
+      return `<div class="today" data-day="${escapeHtml(line.day)}"${hidden}>${todayBody(view.groupId, line, challenge)}</div>`
+    })
+    .join('')
+  const other = `<details class="other-day"${failed ? ' open' : ''}>
+        <summary>Log a different day</summary>
+        ${checkInError}
+        ${checkInControl(view.groupId, challenge, attempt?.checkInDay)}
+      </details>`
+  return `<section class="today-area" data-days>${error}${days}${other}</section>`
+}
+
+function fold(id: string, title: string, body: string, open: boolean): string {
+  return `<details class="fold" id="${id}"${open ? ' open' : ''}>
+      <summary>${title}</summary>
+      <div class="fold-body">${body}</div>
+    </details>`
+}
+
+function memberRow(member: MemberLine, rhythms: readonly RhythmLine[]): string {
+  const rhythm = rhythms.find((line) => line.userId === member.userId)
+  const logged = rhythm ? `<span class="rhythm">${escapeHtml(RHYTHM_LABELS[rhythm.kind])}</span>` : ''
+  return `<li data-member="${escapeHtml(member.userId)}">${badgeCircle(member.badge)} <span class="member-name">${escapeHtml(member.displayName)}</span>${logged}</li>`
+}
+
+function historyBody(checkIns: readonly CheckIn[]): string {
+  if (checkIns.length === 0) return '<p>No check-ins yet.</p>'
+  return `<ul class="check-ins">${checkIns.map(checkInItem).join('')}</ul>`
+}
+
+function startedPage(view: MemberView, challenge: ActiveChallenge, viewer: Viewer, origin: string, attempt: ChallengeAttempt | undefined, toast: string | null): string {
+  const userId = viewer.state === 'signed_in' ? viewer.account.id : ''
+  const share = escapeHtml(`${origin}${groupHref(view.groupId)}`)
+  const payment = attempt?.paymentFailure
+  const dropout = attempt?.dropoutFailure
+  const deletion = attempt?.deleteFailure
+  const dropName = attempt?.dropNameFailure
+  const paymentError = formError(payment && paymentFailureCopy[payment])
+  const money = view.ledger ? balancesSection(view.groupId, view.ledger, userId, attempt?.paymentDraft, paymentError) : paymentError
+  const members = `<ul class="members">${view.members.map((member) => memberRow(member, challenge.rhythms)).join('')}</ul>
+      <p class="share">Share this link to invite someone. <a href="${share}">${share}</a></p>`
+  const manage = `${dropNameForm(view, challenge, userId, formError(dropName && dropNameFailureCopy[dropName]))}
+      ${dropoutForm(view, userId, attempt?.dropoutDraft, formError(dropout && dropoutFailureCopy[dropout]))}
+      ${deleteForm(view, userId, formError(deletion && deleteFailureCopy[deletion]))}`
+  return groupCard(view.label, `
+    ${termsLine(challenge, view.activeCount)}
+    ${todaySection(view, challenge, userId, attempt)}
+    <div class="calendar-block">${view.ledger ? calendarGrid(view.ledger.calendar) : ''}</div>
+    ${fold('money', 'Money', money, payment !== undefined)}
+    ${fold('members', 'Members', members, false)}
+    ${fold('history', 'History', historyBody(view.checkIns), false)}
+    ${fold('manage', 'Manage', manage, dropout !== undefined || deletion !== undefined || dropName !== undefined)}
+  `, toast)
+}
+
 export function renderGroup(
-  view:
-    | (Extract<GroupView, { kind: 'preview' | 'full' | 'solo' }> & { readonly headline: ChallengeHeadline | null })
-    | (Extract<GroupView, { kind: 'members' }> & {
-        readonly challenge: MemberChallengeCard
-        readonly checkIns: readonly CheckIn[]
-        readonly ledger: Ledger | null
-      }),
+  view: (OutsiderView | MemberView),
   viewer: Viewer,
   origin: string,
   attempt?: ChallengeAttempt,
@@ -1507,22 +1637,13 @@ export function renderGroup(
     return groupCard(view.label, `${count}${failure}${headlineText(view.headline)}${joinControl(view.groupId, viewer)}`, toast)
   }
   const challenge = view.challenge
+  if (challenge.phase === 'active') return startedPage(view, challenge, viewer, origin, attempt, toast)
   const userId = viewer.state === 'signed_in' ? viewer.account.id : ''
   const creatorName = view.members.find((member) => member.userId === view.creatorId)?.displayName ?? 'the creator'
   const creator = { isViewer: userId === view.creatorId, name: creatorName }
   const terms = termsBlock(view.groupId, challenge, creator, attempt?.draft)
-  const start =
-    challenge.phase === 'active'
-      ? ''
-      : startSection(
-          view.groupId,
-          challenge,
-          creator,
-          missingNames(view.members, challenge.missingRhythms),
-          attempt?.startFailure,
-        )
+  const start = startSection(view.groupId, challenge, creator, missingNames(view.members, challenge.missingRhythms), attempt?.startFailure)
   const rhythm = rhythmControl(view.groupId, challenge, userId, attempt?.rhythmDraft)
-  const checkIn = checkInControl(view.groupId, challenge, userId, attempt?.checkInDay)
   const rhythms = challenge.phase === 'unopened' ? [] : challenge.rhythms
   const share = escapeHtml(`${origin}${groupHref(view.groupId)}`)
   return groupCard(view.label, `
@@ -1532,11 +1653,7 @@ export function renderGroup(
     ${terms}
     ${rhythm}
     ${start}
-    ${checkIn}
     <ul class="members">${view.members.map((member) => memberItem(member, rhythms)).join('')}</ul>
-    ${view.ledger ? calendarGrid(view.ledger.calendar) : ''}
-    ${view.ledger ? balancesSection(view.groupId, view.ledger, userId, attempt?.paymentDraft) : ''}
-    ${checkInList(view.checkIns)}
     ${dropoutForm(view, userId, attempt?.dropoutDraft)}
     ${deleteForm(view, userId)}
     <p class="share">Share this link to invite someone. <a href="${share}">${share}</a></p>

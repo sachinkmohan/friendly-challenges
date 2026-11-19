@@ -35,6 +35,10 @@ export type GroupCalendar = {
 
 export type HeatmapWeek = readonly (MarkedDay | null)[]
 
+export type DayStatus = 'before_start' | 'after_end' | 'due' | 'kept' | 'missed' | 'not_due'
+
+export type DayLine = { readonly day: IsoDate; readonly status: DayStatus }
+
 // standing is null until the challenge's first day.
 export type RowMember = {
   readonly userId: string
@@ -117,6 +121,23 @@ function markMember(span: CalendarSpan, days: readonly IsoDate[], member: Calend
       }),
     })),
   }
+}
+
+function dayStatus(window: ChallengeWindow, member: CalendarMember, day: IsoDate): DayStatus {
+  if (day < window.startsOn) return 'before_start'
+  if (day > window.endsOn) return 'after_end'
+  const color = member.colors.get(day)
+  if (color === 'green') return 'kept'
+  if (color === 'red') return 'missed'
+  return memberIsDue(window, member.span, member.rhythm, day) ? 'due' : 'not_due'
+}
+
+// Yesterday, today, and tomorrow in UTC: one of them is today on the phone's own clock, wherever it is.
+export function aroundToday(window: ChallengeWindow, member: CalendarMember, today: IsoDate): readonly DayLine[] {
+  return [-1, 0, 1].map((offset) => {
+    const day = addDays(today, offset)
+    return { day, status: dayStatus(window, member, day) }
+  })
 }
 
 export function buildCalendar(span: CalendarSpan, members: readonly CalendarMember[]): GroupCalendar {

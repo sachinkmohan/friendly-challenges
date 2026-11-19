@@ -1,5 +1,6 @@
+import { badgeOf, type Badge } from './badges.ts'
 import type { Database } from './db.ts'
-import { ACTIVE_MEMBER_CAP, activeMemberIds, compare, groupRef, labelOf, memberOf, parseGroup, readGroup, utcToday, type GroupDoc, type UserDoc } from './store.ts'
+import { ACTIVE_MEMBER_CAP, activeMemberIds, compare, groupRef, labelOf, memberOf, readGroup, utcToday, type GroupDoc, type UserDoc } from './store.ts'
 import type { Account } from './identity.ts'
 
 export type GroupId = string & { readonly brand: 'GroupId' }
@@ -21,6 +22,7 @@ export type MemberLine = {
   userId: string
   displayName: string
   avatarUrl: string | null
+  badge: Badge
   joinedOn: string
 }
 
@@ -147,7 +149,7 @@ export function groupViewFrom(
       .map((userId): MemberLine => {
         const user = users.get(userId)
         if (!user) throw new Error('member user')
-        return { userId, displayName: user.displayName, avatarUrl: user.avatarUrl, joinedOn: group.members[userId]!.joinedOn }
+        return { userId, displayName: user.displayName, avatarUrl: user.avatarUrl, badge: badgeOf(user), joinedOn: group.members[userId]!.joinedOn }
       })
       .sort(
         (a, b) =>

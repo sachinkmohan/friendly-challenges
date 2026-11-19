@@ -4,7 +4,8 @@ import { parseIsoDate, saveRhythm, startChallenge, type IsoDate } from '../src/c
 import { logCheckIn } from '../src/checkins.ts'
 import { closeDatabase, openTestDatabase, type Database } from '../src/db.ts'
 import type { GroupId } from '../src/groups.ts'
-import { listHomeCards, type DayStatus } from '../src/home.ts'
+import type { DayStatus } from '../src/calendar.ts'
+import { listHomeCards } from '../src/home.ts'
 import type { Account } from '../src/identity.ts'
 import { CHECK_IN_TODAY, closeServer, cookieFor, groupWith, listen, person, post, setJoinedOn } from './support/fixtures.ts'
 

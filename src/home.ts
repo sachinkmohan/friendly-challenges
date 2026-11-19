@@ -1,26 +1,22 @@
 import { badgeOf, firstNameOf } from './badges.ts'
 import { calendarDebts, membersFrom, settle, standingsFrom } from './balances.ts'
 import {
-  addDays,
+  aroundToday,
   buildCalendar,
   weeksOf,
   type CalendarMember,
+  type DayLine,
   type GroupCalendar,
   type HeatmapWeek,
   type RowMember,
 } from './calendar.ts'
-import { memberIsDue, stakesGoFrom, windowFrom, type ChallengeWindow, type IsoDate } from './challenge.ts'
+import { stakesGoFrom, windowFrom, type IsoDate } from './challenge.ts'
 import type { Database } from './db.ts'
 import { parseGroupId, type GroupId } from './groups.ts'
 import type { Account } from './identity.ts'
 import { activeMemberIds, compare, labelOf, parseGroup, readCheckIns, readUsers, type ChallengeDoc, type UserDoc } from './store.ts'
 
-export type DayStatus = 'before_start' | 'due' | 'kept' | 'missed' | 'not_due'
-
-export type DayLine = { readonly day: IsoDate; readonly status: DayStatus }
-
 // members is null for a solo challenge, whose stakes go to a cause.
-// days holds yesterday, today, and tomorrow in UTC, so the browser can pick the one that is today on its own clock.
 export type HomeChallenge =
   | { readonly phase: 'draft' }
   | {
@@ -64,14 +60,6 @@ function rowMembers(
     })
 }
 
-function dayStatus(window: ChallengeWindow, member: CalendarMember, day: IsoDate): DayStatus {
-  if (day < window.startsOn) return 'before_start'
-  const color = member.colors.get(day)
-  if (color === 'green') return 'kept'
-  if (color === 'red') return 'missed'
-  return memberIsDue(window, member.span, member.rhythm, day) ? 'due' : 'not_due'
-}
-
 export async function listHomeCards(db: Database, account: Account, today: IsoDate): Promise<readonly HomeCard[]> {
   const snapshot = await db.collection('groups').where('memberIds', 'array-contains', account.id).get()
   const cards = await Promise.all(
@@ -99,12 +87,7 @@ export async function listHomeCards(db: Database, account: Account, today: IsoDa
           weeks: weeksOf(mine?.days ?? []),
           members: rowMembers(group.challenge, calendar, members, users, account.id, today >= window.startsOn),
           today,
-          days: viewer
-            ? [-1, 0, 1].map((offset) => {
-                const day = addDays(today, offset)
-                return { day, status: dayStatus(window, viewer, day) }
-              })
-            : [],
+          days: viewer ? aroundToday(window, viewer, today) : [],
         },
       }
     }),

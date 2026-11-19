@@ -791,7 +791,7 @@ test('a solo challenge starts with no input and the card names the cause', async
     assert.equal(stored?.phase, 'active')
     assert.equal(stored?.cause, 'Food & Shelter')
     const html = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
-    assert.match(html, /<p>Missed days are owed to Food &amp; Shelter\.<\/p>/)
+    assert.match(html, /<p class="terms-line">[^<]* · 1 active · owed to Food &amp; Shelter<\/p>/)
     assert.doesNotMatch(html, /challenge\/start/)
     assert.doesNotMatch(html, /Before you start/)
   } finally {
