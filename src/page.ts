@@ -30,6 +30,7 @@ import {
   type StartStep,
 } from './challenge.ts'
 import { CURRENCY_CODES } from './currencies.ts'
+import { ACTIVE_MEMBER_CAP } from './store.ts'
 import { BADGE_EMOJIS, type Badge, type BadgeEmoji } from './badges.ts'
 import { DAY_MARK_LABELS, type DayLine, type GroupCalendar, type HeatmapWeek, type MarkedDay, type RowMember } from './calendar.ts'
 import type { HomeCard, HomeChallenge } from './home.ts'
@@ -317,9 +318,17 @@ const frame = (screens: string, head: PageHead, toast: string | null = null) => 
     .today-area .today-status.kept { color: #2f7d4a; }
     .today-area .today-status.missed { color: #b3392f; }
     .today-log button { min-height: 64px; font-size: 18px; }
-    details.fold > summary, details.change > summary, details.other-day > summary { display: flex; align-items: center; min-height: 48px; cursor: pointer; list-style: none; touch-action: manipulation; }
-    details.fold > summary::-webkit-details-marker, details.change > summary::-webkit-details-marker, details.other-day > summary::-webkit-details-marker { display: none; }
-    details.change > summary, details.other-day > summary { font-weight: 650; color: #1c1915; text-decoration: underline; text-underline-offset: 3px; }
+    details.fold > summary, details.change > summary, details.other-day > summary, details.action > summary { display: flex; align-items: center; min-height: 48px; cursor: pointer; list-style: none; touch-action: manipulation; }
+    details.fold > summary::-webkit-details-marker, details.change > summary::-webkit-details-marker, details.other-day > summary::-webkit-details-marker, details.action > summary::-webkit-details-marker { display: none; }
+    details.change > summary, details.other-day > summary, details.action > summary { font-weight: 650; color: #1c1915; text-decoration: underline; text-underline-offset: 3px; }
+    details.action { margin-top: 8px; }
+    details.record-payment { margin-top: 16px; }
+    details.record-payment > summary { justify-content: center; border-radius: 14px; box-shadow: inset 0 0 0 1.5px #1c1915; text-decoration: none; }
+    details.record-payment[open] > summary { margin-bottom: 8px; }
+    .fold-title { display: flex; flex-direction: column; }
+    .fold-note { font-size: 14px; font-weight: 400; color: #5c564c; }
+    .invite-hint { margin-top: 16px; }
+    .invite-link[hidden], .invite-button[hidden] { display: none; }
     details.fold { margin-top: 0; border-top: 1px solid #e7e0d4; }
     .calendar-block + details.fold { margin-top: 16px; }
     details.fold > summary { justify-content: space-between; font-weight: 650; color: #1c1915; }
@@ -392,7 +401,7 @@ const frame = (screens: string, head: PageHead, toast: string | null = null) => 
     .in-app { margin-top: 16px; padding: 16px; border-radius: 14px; background: #f6efe2; }
     .in-app p { margin: 0; }
     .in-app .field-hint { margin-top: 8px; }
-    .in-app-link {
+    .in-app-link, .invite-link {
       display: block;
       width: 100%;
       min-height: 48px;
@@ -645,18 +654,37 @@ const frame = (screens: string, head: PageHead, toast: string | null = null) => 
       error.textContent = text
       error.hidden = false
     }
+    const copyLink = async (field, button) => {
+      try {
+        await navigator.clipboard.writeText(field.value)
+        button.textContent = 'Copied'
+      } catch {
+        field.hidden = false
+        field.focus()
+        field.setSelectionRange(0, field.value.length)
+        button.textContent = 'Press and hold the link to copy it'
+      }
+    }
     document.querySelectorAll('.in-app').forEach((card) => {
-      const field = card.querySelector('.in-app-link')
       const copy = card.querySelector('.copy-link')
-      copy.addEventListener('click', async () => {
-        try {
-          await navigator.clipboard.writeText(field.value)
-          copy.textContent = 'Copied'
-        } catch {
-          field.focus()
-          field.setSelectionRange(0, field.value.length)
-          copy.textContent = 'Press and hold the link to copy it'
+      copy.addEventListener('click', () => copyLink(card.querySelector('.in-app-link'), copy))
+    })
+    document.querySelectorAll('.invite').forEach((invite) => {
+      const button = invite.querySelector('.invite-button')
+      const field = invite.querySelector('.invite-link')
+      invite.querySelector('.invite-hint').hidden = true
+      field.hidden = true
+      button.hidden = false
+      button.addEventListener('click', async () => {
+        if (navigator.share) {
+          try {
+            await navigator.share({ title: button.dataset.title, url: field.value })
+            return
+          } catch (error) {
+            if (error && error.name === 'AbortError') return
+          }
         }
+        await copyLink(field, button)
       })
     })
     // An installed iOS app has no Safari token in its user agent, so the server took it for an in-app browser.
@@ -1352,7 +1380,6 @@ function paymentForm(groupId: GroupId, ledger: GroupLedger, userId: string, draf
     draft?.payeeId ?? '',
   )
   return `<form method="post" action="${action}">
-      <p class="grid-title">Record a payment you made</p>
       <p>The app does not send money. Record a payment that already happened.</p>
       ${error}
       <label for="payment-payee">Paid to</label>
@@ -1363,71 +1390,99 @@ function paymentForm(groupId: GroupId, ledger: GroupLedger, userId: string, draf
 
 function paymentList(ledger: Ledger): string {
   if (ledger.payments.length === 0) return ''
-  return `<p class="check-ins-title">Payments</p><ul class="check-ins payments">${ledger.payments.map((item) => paymentItem(ledger, item)).join('')}</ul>`
+  return action('Payments', `<ul class="check-ins payments">${ledger.payments.map((item) => paymentItem(ledger, item)).join('')}</ul>`, false)
+}
+
+function action(title: string, body: string, open: boolean, kind = 'action'): string {
+  return `<details class="${kind}"${open ? ' open' : ''}><summary>${escapeHtml(title)}</summary>${body}</details>`
+}
+
+function recordPayment(form: string, draft: PaymentInput | undefined): string {
+  return action('Record a payment', form, draft !== undefined, 'action record-payment')
+}
+
+function soloPosition(ledger: SoloLedger): { sign: 'owes' | 'owed' | 'even'; text: string } {
+  const cause = ledger.cause
+  const amount = money(ledger, Math.abs(ledger.dueMinor))
+  if (ledger.dueMinor > 0) return { sign: 'owes', text: `owes ${cause} ${amount}` }
+  if (ledger.dueMinor < 0) return { sign: 'owed', text: `has paid ${cause} ${amount} ahead` }
+  return { sign: 'even', text: `is even with ${cause}` }
+}
+
+function listNames(items: readonly string[]): string {
+  return items.length < 2 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+}
+
+/** The viewer's own place in the money, as the folded Money row reads it. */
+function positionText(ledger: Ledger, userId: string): string {
+  if (ledger.kind === 'solo') {
+    const amount = money(ledger, Math.abs(ledger.dueMinor))
+    if (ledger.dueMinor > 0) return `You owe ${ledger.cause} ${amount}`
+    if (ledger.dueMinor < 0) return `You have paid ${ledger.cause} ${amount} ahead`
+    return `You are even with ${ledger.cause}`
+  }
+  const owes = ledger.open.filter((line) => line.debtorId === userId)
+  if (owes.length > 0) return `You owe ${listNames(owes.map((line) => `${line.creditorName} ${money(ledger, line.amountMinor)}`))}`
+  const net = ledger.nets.find((line) => line.userId === userId)?.netMinor ?? 0
+  if (net > 0) return `You are owed ${money(ledger, net)}`
+  return 'You are even'
 }
 
 function soloBalances(groupId: GroupId, ledger: SoloLedger, draft: PaymentInput | undefined, error: string): string {
-  const name = escapeHtml(ledger.member.displayName)
-  const cause = escapeHtml(ledger.cause)
-  const amount = escapeHtml(money(ledger, Math.abs(ledger.dueMinor)))
-  const sign = ledger.dueMinor > 0 ? 'owes' : ledger.dueMinor < 0 ? 'owed' : 'even'
-  const text =
-    sign === 'owes' ? `owes ${cause} ${amount}` : sign === 'owed' ? `has paid ${cause} ${amount} ahead` : `is even with ${cause}`
-  const due = `<ul class="check-ins balances"><li data-due="${ledger.dueMinor}"><span class="member-name">${name}</span> <span class="net ${sign}">${text}</span></li></ul>`
-  const action = escapeHtml(`${groupHref(groupId)}${paymentSuffix}`)
-  const form = `<form method="post" action="${action}">
-      <p class="grid-title">Record a payment you made</p>
+  const { sign, text } = soloPosition(ledger)
+  const due = `<ul class="check-ins balances"><li data-due="${ledger.dueMinor}"><span class="member-name">${escapeHtml(ledger.member.displayName)}</span> <span class="net ${sign}">${escapeHtml(text)}</span></li></ul>`
+  const form = `<form method="post" action="${escapeHtml(`${groupHref(groupId)}${paymentSuffix}`)}">
       <p>The app does not send money. Record a payment that already happened.</p>
-      <p>Paid to ${cause}</p>
+      <p>Paid to ${escapeHtml(ledger.cause)}</p>
       ${error}
       ${paymentFields(ledger, draft, 'Reference')}
     </form>`
-  return `<p class="check-ins-title">Balance</p>${due}${form}${paymentList(ledger)}`
+  return `${due}${recordPayment(form, draft)}${paymentList(ledger)}`
 }
 
 function groupBalances(groupId: GroupId, ledger: GroupLedger, userId: string, draft: PaymentInput | undefined, error: string): string {
-  const nets = `<ul class="check-ins balances">${ledger.nets.map((line) => netItem(ledger, line)).join('')}</ul>`
   const open =
     ledger.open.length === 0
       ? '<p>Nobody owes anyone.</p>'
-      : `<ul class="check-ins open-amounts">${ledger.open.map((line) => openItem(ledger, line)).join('')}</ul>`
-  return `<p class="check-ins-title">Balances</p>${nets}<p class="check-ins-title">Who owes whom</p>${open}${paymentForm(groupId, ledger, userId, draft, error)}${paymentList(ledger)}`
+      : `<p class="check-ins-title">Who owes whom</p><ul class="check-ins open-amounts">${ledger.open.map((line) => openItem(ledger, line)).join('')}</ul>`
+  const nets = `<ul class="check-ins balances">${ledger.nets.map((line) => netItem(ledger, line)).join('')}</ul>`
+  return `${open}${recordPayment(paymentForm(groupId, ledger, userId, draft, error), draft)}${action('All balances', nets, false)}${paymentList(ledger)}`
 }
 
 function balancesSection(groupId: GroupId, ledger: Ledger, userId: string, draft: PaymentInput | undefined, error: string): string {
   return ledger.kind === 'solo' ? soloBalances(groupId, ledger, draft, error) : groupBalances(groupId, ledger, userId, draft, error)
 }
 
+type MembersView = Extract<GroupView, { kind: 'members' }>
+
+type DropoutFor = 'self' | 'other'
+
 function dropoutForm(
-  view: Extract<GroupView, { kind: 'members' }>,
-  userId: string,
+  view: MembersView,
+  who: DropoutFor,
+  choices: readonly MemberLine[],
   draft: DropoutInput | undefined,
-  error = '',
+  error: string,
 ): string {
-  const choices = userId === view.creatorId ? view.members : view.members.filter((member) => member.userId === userId)
-  if (choices.length === 0) return error
   const action = escapeHtml(`${groupHref(view.groupId)}${dropoutSuffix}`)
-  const members = optionList(
-    choices.map((member) => ({ value: member.userId, label: member.displayName })),
-    draft?.memberId ?? '',
-  )
+  const member =
+    who === 'self'
+      ? `<input type="hidden" name="member" value="${escapeHtml(choices[0]?.userId ?? '')}">`
+      : `<label for="dropout-member">Member</label>
+      <select id="dropout-member" name="member">${optionList(choices.map((line) => ({ value: line.userId, label: line.displayName })), draft?.memberId ?? '')}</select>`
   return `<form method="post" action="${action}">
-      <p class="grid-title">Leave or record a dropout</p>
       <p>Debts through the last day stay. Days after it owe nothing.</p>
       ${error}
-      <label for="dropout-member">Member</label>
-      <select id="dropout-member" name="member">${members}</select>
-      <label for="dropout-day">Last day</label>
-      <input id="dropout-day" name="last_day" type="date" value="${escapeHtml(draft?.lastDay ?? '')}" required>
-      <button type="submit">Record dropout</button>
+      ${member}
+      <label for="dropout-day-${who}">Last day</label>
+      <input id="dropout-day-${who}" name="last_day" type="date" value="${escapeHtml(draft?.lastDay ?? '')}" required>
+      <button type="submit">${who === 'self' ? 'Leave challenge' : 'Record dropout'}</button>
     </form>`
 }
 
-function deleteForm(view: Extract<GroupView, { kind: 'members' }>, userId: string, error = ''): string {
-  if (userId !== view.creatorId) return error
+function deleteForm(view: MembersView, error: string): string {
   const action = escapeHtml(`${groupHref(view.groupId)}${deleteSuffix}`)
   return `<form method="post" action="${action}">
-      <p class="grid-title">Delete this challenge</p>
       <p>This removes the challenge, every check-in, and every payment for everyone. It cannot be undone.</p>
       ${error}
       <label class="confirm"><input type="checkbox" name="confirm" value="yes" required> Delete it for everyone</label>
@@ -1435,7 +1490,30 @@ function deleteForm(view: Extract<GroupView, { kind: 'members' }>, userId: strin
     </form>`
 }
 
-function dropNameForm(view: Extract<GroupView, { kind: 'members' }>, challenge: MemberChallengeCard, userId: string, error = ''): string {
+type ManageFailures = {
+  readonly dropout?: DropoutFailure | undefined
+  readonly dropoutDraft?: DropoutInput | undefined
+  readonly deletion?: DeleteFailure | undefined
+}
+
+// Each action folds on its own, so no red button shows until its row is opened.
+function manageActions(view: MembersView, userId: string, failures: ManageFailures): string {
+  const isCreator = userId === view.creatorId
+  const self = view.members.filter((member) => member.userId === userId)
+  const others = view.members.filter((member) => member.userId !== userId)
+  const dropoutError = formError(failures.dropout && dropoutFailureCopy[failures.dropout])
+  const forSelf = failures.dropout !== undefined && (failures.dropoutDraft?.memberId ?? userId) === userId
+  const forOther = failures.dropout !== undefined && !forSelf
+  const deleteError = formError(failures.deletion && deleteFailureCopy[failures.deletion])
+  const rows = [
+    self.length === 1 ? action('Leave this challenge', dropoutForm(view, 'self', self, forSelf ? failures.dropoutDraft : undefined, forSelf ? dropoutError : ''), forSelf) : forSelf ? dropoutError : '',
+    isCreator && others.length > 0 ? action('Record a dropout', dropoutForm(view, 'other', others, forOther ? failures.dropoutDraft : undefined, forOther ? dropoutError : ''), forOther) : forOther ? dropoutError : '',
+    isCreator ? action('Delete challenge', deleteForm(view, deleteError), failures.deletion !== undefined) : deleteError,
+  ]
+  return rows.join('')
+}
+
+function dropNameForm(view: MembersView, challenge: MemberChallengeCard, userId: string, error = ''): string {
   if (userId !== view.creatorId || !view.hasGroupName || challenge.phase === 'unopened') return error
   const action = escapeHtml(`${groupHref(view.groupId)}${dropNameSuffix}`)
   return `<form method="post" action="${action}">
@@ -1628,9 +1706,22 @@ function historyBody(checkIns: readonly CheckIn[]): string {
   return `<ul class="check-ins">${checkIns.map(checkInItem).join('')}</ul>`
 }
 
+function inviteControl(view: MemberView, link: string): string {
+  if (view.ledger?.kind === 'solo' || view.activeCount >= ACTIVE_MEMBER_CAP) return ''
+  return `<div class="invite">
+        <button type="button" class="secondary invite-button" data-title="${escapeHtml(view.label)}" hidden>Invite a friend</button>
+        <p class="field-hint invite-hint">Copy this link and send it to a friend.</p>
+        <input class="invite-link" type="text" readonly value="${escapeHtml(link)}" aria-label="Link to invite a friend">
+      </div>`
+}
+
+function moneyTitle(ledger: Ledger | null, userId: string): string {
+  const note = ledger ? `<span class="fold-note">${escapeHtml(positionText(ledger, userId))}</span>` : ''
+  return `<span class="fold-title">Money${note}</span>`
+}
+
 function startedPage(view: MemberView, challenge: ActiveChallenge, viewer: Viewer, origin: string, attempt: ChallengeAttempt | undefined, toast: string | null): string {
   const userId = viewer.state === 'signed_in' ? viewer.account.id : ''
-  const share = escapeHtml(`${origin}${groupHref(view.groupId)}`)
   const payment = attempt?.paymentFailure
   const dropout = attempt?.dropoutFailure
   const deletion = attempt?.deleteFailure
@@ -1638,15 +1729,14 @@ function startedPage(view: MemberView, challenge: ActiveChallenge, viewer: Viewe
   const paymentError = formError(payment && paymentFailureCopy[payment])
   const money = view.ledger ? balancesSection(view.groupId, view.ledger, userId, attempt?.paymentDraft, paymentError) : paymentError
   const members = `<ul class="members">${view.members.map((member) => memberRow(member, challenge.rhythms)).join('')}</ul>
-      <p class="share">Share this link to invite someone. <a href="${share}">${share}</a></p>`
-  const manage = `${dropNameForm(view, challenge, userId, formError(dropName && dropNameFailureCopy[dropName]))}
-      ${dropoutForm(view, userId, attempt?.dropoutDraft, formError(dropout && dropoutFailureCopy[dropout]))}
-      ${deleteForm(view, userId, formError(deletion && deleteFailureCopy[deletion]))}`
+      ${inviteControl(view, `${origin}${groupHref(view.groupId)}`)}`
+  const manage = `${manageActions(view, userId, { dropout, dropoutDraft: attempt?.dropoutDraft, deletion })}
+      ${dropNameForm(view, challenge, userId, formError(dropName && dropNameFailureCopy[dropName]))}`
   return groupCard(view.label, `
     ${termsLine(challenge, view.activeCount)}
     ${todaySection(view, challenge, userId, attempt)}
     <div class="calendar-block">${view.ledger ? calendarGrid(view.ledger.calendar) : ''}</div>
-    ${fold('money', 'Money', money, payment !== undefined)}
+    ${fold('money', moneyTitle(view.ledger, userId), money, payment !== undefined)}
     ${fold('members', 'Members', members, false)}
     ${fold('history', 'History', historyBody(view.checkIns), false)}
     ${fold('manage', 'Manage', manage, dropout !== undefined || deletion !== undefined || dropName !== undefined)}
@@ -1693,8 +1783,7 @@ export function renderGroup(
     ${rhythm}
     ${start}
     <ul class="members">${view.members.map((member) => memberItem(member, rhythms)).join('')}</ul>
-    ${dropoutForm(view, userId, attempt?.dropoutDraft)}
-    ${deleteForm(view, userId)}
+    ${manageActions(view, userId, {})}
     <p class="share">Share this link to invite someone. <a href="${share}">${share}</a></p>
   `, toast)
 }
