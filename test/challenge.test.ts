@@ -21,7 +21,7 @@ import type { Account } from '../src/identity.ts'
 import { safeReturnPath } from '../src/page.ts'
 import { activeMemberIds, groupRef, labelOf, readGroup, utcToday, type ChallengeDoc } from '../src/store.ts'
 import { closeServer, cookieFor, groupWith, legacyGroupWith, listen, person, post, setLeftOn } from './support/fixtures.ts'
-import { readChallengeHeadline, readMemberChallenge } from './support/reads.ts'
+import { readChallengeHeadline, readMemberChallenge, setupStep } from './support/reads.ts'
 
 function day(value: string) {
   const parsed = parseIsoDate(value)
@@ -523,9 +523,9 @@ test('the group card saves the stake, starts with the people who are active, and
     assert.equal(row?.typeKind, 'coding')
     assert.equal(row?.customLabel, null)
     const unpicked = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
-    assert.match(unpicked, /Pick your rhythm/)
-    assert.match(unpicked, /<li data-done="false">[^]*?Everyone picked a rhythm\. Waiting on Ada\./)
-    assert.doesNotMatch(unpicked, /challenge\/start#start/)
+    assert.deepEqual(setupStep(unpicked, 'rhythm')?.open, true, 'your rhythm is the next step')
+    assert.equal(setupStep(unpicked, 'everyone')?.note, 'Waiting on Ada')
+    assert.match(unpicked, /<button type="submit" disabled>Start challenge<\/button>/)
     assert.doesNotMatch(unpicked, /anchor_on|Anchor date/)
     assert.deepEqual(
       [...unpicked.matchAll(/<option value="(every_[^"]+)"/g)].map((match) => match[1]),
@@ -533,8 +533,9 @@ test('the group card saves the stake, starts with the people who are active, and
     )
     assert.equal((await post(base, `${groupPath}/rhythm`, adaCookie, form({ interval: 'every_day' }))).status, 303)
     const memberHtml = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
-    assert.match(memberHtml, /<li data-done="true">[^]*?Everyone picked a rhythm\. <span class="sr-only">Done\.<\/span>/)
-    assert.doesNotMatch(memberHtml, /Pick your rhythm/)
+    assert.equal(setupStep(memberHtml, 'everyone')?.done, true)
+    const rhythm = setupStep(memberHtml, 'rhythm')
+    assert.deepEqual([rhythm?.done, rhythm?.open, rhythm?.note], [true, false, 'Every day'])
     assert.match(memberHtml, /No sweets/)
     assert.match(memberHtml, /Coding/)
     assert.match(memberHtml, /value="5\.00"/)
@@ -543,10 +544,13 @@ test('the group card saves the stake, starts with the people who are active, and
     assert.match(memberHtml, /value="KWD"/)
     assert.doesNotMatch(memberHtml, /value="XYZ"/)
     assert.match(memberHtml, /name="stake"/)
-    assert.match(memberHtml, /<li data-done="true">[^]*?Save the challenge name, type, stake, and dates\. <span class="sr-only">Done\.<\/span>/)
-    assert.match(memberHtml, /<li data-done="false">[^]*?2 to 5 people are active\./)
-    assert.match(memberHtml, /Start challenge appears here once every step above is done\./)
-    assert.doesNotMatch(memberHtml, /challenge\/start#start/)
+    assert.equal(setupStep(memberHtml, 'terms')?.done, true)
+    assert.equal(setupStep(memberHtml, 'terms')?.note, '5.00 USD per missed day · 1\u00a0Nov – 30\u00a0Nov')
+    const invite = setupStep(memberHtml, 'invite')
+    assert.deepEqual([invite?.done, invite?.open, invite?.note], [false, true, '1 of 2 to 5 active'], 'inviting is the next step')
+    assert.match(invite?.html ?? '', /Invite a friend/)
+    assert.match(memberHtml, /<button type="submit" disabled>Start challenge<\/button>/)
+    assert.match(memberHtml, /Start challenge works once every step above is done\./)
     assert.doesNotMatch(memberHtml, /name="cause"/)
     assert.match(memberHtml, /class="screen is-current"/)
     assert.doesNotMatch(memberHtml, /<section[^>]*\sid=/)
@@ -594,23 +598,23 @@ test('the group card saves the stake, starts with the people who are active, and
     assert.match(graceView, /5 JPY/)
     assert.match(graceView, /Set by Ada\./)
     assert.doesNotMatch(graceView, /name="stake"/)
-    assert.match(graceView, /Pick your rhythm/)
-    assert.match(graceView, /Everyone picked a rhythm\. Waiting on Grace\./)
+    assert.equal(setupStep(graceView, 'terms')?.open, false, 'a member who is not the creator cannot act on the terms')
+    assert.equal(setupStep(graceView, 'rhythm')?.open, true)
+    assert.equal(setupStep(graceView, 'everyone')?.note, 'Waiting on Grace')
     assert.match(graceView, /Waiting for Ada to start\./)
     assert.doesNotMatch(graceView, /challenge\/start/)
-    assert.ok(graceView.indexOf('Pick your rhythm') < graceView.indexOf('Before you start'))
-    assert.ok(graceView.indexOf('Before you start') < graceView.indexOf('Waiting for Ada to start.'))
     const waitingOnGrace = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
-    assert.match(waitingOnGrace, /Waiting on Grace\./)
-    assert.doesNotMatch(waitingOnGrace, /challenge\/start#start/)
+    assert.equal(setupStep(waitingOnGrace, 'everyone')?.note, 'Waiting on Grace')
+    assert.match(waitingOnGrace, /<button type="submit" disabled>Start challenge<\/button>/)
     assert.equal((await post(base, `${groupPath}/rhythm`, graceCookie, form({ interval: 'every_2_days' }))).status, 303)
     const gracePicked = await (await fetch(`${base}${groupPath}`, { headers: { cookie: graceCookie } })).text()
-    assert.match(gracePicked, /<li data-done="true">[^]*?Everyone picked a rhythm\./)
+    assert.equal(setupStep(gracePicked, 'everyone')?.done, true)
     assert.match(gracePicked, /Waiting for Ada to start\./)
     assert.doesNotMatch(gracePicked, /challenge\/start/)
     const pairHtml = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
-    assert.match(pairHtml, /action="[^"]+\/challenge\/start#start"/)
-    assert.match(pairHtml, /<li data-done="true">[^]*?2 to 5 people are active\./)
+    assert.match(pairHtml, /action="[^"]+\/challenge\/start#start"><button type="submit">Start challenge<\/button>/)
+    assert.deepEqual([setupStep(pairHtml, 'invite')?.done, setupStep(pairHtml, 'invite')?.note], [true, '2 of 2 to 5 active'])
+    assert.equal(pairHtml.match(/<details class="fold step"[^>]* open>/), null, 'nothing left to do opens no step')
     assert.doesNotMatch(pairHtml, /name="cause"/)
 
     assert.equal((await post(base, `${groupPath}/join`, linCookie)).status, 303)
@@ -618,11 +622,11 @@ test('the group card saves the stake, starts with the people who are active, and
     assert.equal(waitingOnLin.status, 409)
     const waitingOnLinHtml = await waitingOnLin.text()
     assert.match(waitingOnLinHtml, /Everyone needs to pick a rhythm before the challenge starts\./)
-    assert.match(waitingOnLinHtml, /Everyone picked a rhythm\. Waiting on Lin\./)
+    assert.equal(setupStep(waitingOnLinHtml, 'everyone')?.note, 'Waiting on Lin')
     assert.equal((await challengeOf(db, groupId))?.phase, 'draft')
     assert.equal((await post(base, `${groupPath}/rhythm`, linCookie, form({ interval: 'every_3_days' }))).status, 303)
     const ready = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
-    assert.match(ready, /action="[^"]+\/challenge\/start#start"/)
+    assert.match(ready, /action="[^"]+\/challenge\/start#start"><button type="submit">Start challenge<\/button>/)
     const started = await post(base, `${groupPath}/challenge/start`, adaCookie, '')
     assert.equal(started.status, 303)
     const startedAgain = await post(base, `${groupPath}/challenge/start`, adaCookie, '')
@@ -780,8 +784,8 @@ test('a solo challenge starts with no input and the card names the cause', async
     const groupPath = `/groups/${groupId}`
     const draft = await (await fetch(`${base}${groupPath}`, { headers: { cookie: adaCookie } })).text()
     assert.match(draft, /<p>Missed days are owed to Food &amp; Shelter\.<\/p>/)
-    assert.match(draft, /<li data-done="true">[^]*?Just you, as a solo challenge\./)
-    assert.match(draft, /action="[^"]+\/challenge\/start#start"/)
+    assert.equal(setupStep(draft, 'invite'), null, 'a solo challenge has nobody to invite')
+    assert.match(draft, /action="[^"]+\/challenge\/start#start"><button type="submit">Start challenge<\/button>/)
     assert.doesNotMatch(draft, /name="cause"/)
 
     const started = await post(base, `${groupPath}/challenge/start`, adaCookie, '')
@@ -807,6 +811,41 @@ test('a rhythm stored with an anchor reads as just its kind', async () => {
     const groupId = await storedChallenge(db, { ...storedTerms, phase: 'draft' }, rhythms)
     assert.deepEqual((await readGroup(db, groupId))?.rhythms, { ada: { kind: 'every_2_days' } })
   } finally {
+    await closeDatabase(db)
+  }
+})
+
+test('before the start the page is the checklist: start date on top, no calendar, money, or history, and Manage stays', async () => {
+  const db = openTestDatabase()
+  const ada = await person(db, 'Ada')
+  const grace = await person(db, 'Grace')
+  const { server, base } = await listen(db)
+  try {
+    const groupPath = `/groups/${await groupWith(db, [ada, grace], 'No sweets')}`
+    const page = async (who: Account) => (await fetch(`${base}${groupPath}`, { headers: { cookie: await cookieFor(db, who) } })).text()
+    const adaHtml = await page(ada)
+    assert.match(adaHtml, /<p class="terms-line">5\.00 USD per missed day · 1 Nov – 30 Nov · 2 active<\/p>/)
+    for (const gone of ['id="money"', 'id="history"', 'id="members"', '<p class="grid-title">Calendar</p>', 'class="share"']) {
+      assert.ok(!adaHtml.includes(gone), `${gone} waits for the start`)
+    }
+    assert.match(adaHtml, /<details class="fold" id="manage">/)
+    assert.deepEqual(
+      [...adaHtml.matchAll(/<details class="fold step" id="step-(\w+)"/g)].map((match) => match[1]),
+      ['terms', 'rhythm', 'invite', 'everyone'],
+    )
+    const open = (html: string) => [...html.matchAll(/<details class="fold step" id="step-(\w+)"[^>]* open>/g)].map((match) => match[1])
+    assert.deepEqual(open(adaHtml), [], 'with the terms, a rhythm, and a friend in, nothing waits on Ada')
+    assert.deepEqual(open(await page(grace)), ['rhythm'], 'only the next unfinished step of your own is open')
+
+    const blank = await (await post(base, `${groupPath}/challenge`, await cookieFor(db, ada), challengeForm({ name: '' }))).text()
+    assert.deepEqual(open(blank), ['terms'])
+    assert.match(setupStep(blank, 'terms')?.html ?? '', /<p class="form-error" role="alert">Type a challenge name\.<\/p><form method="post"/)
+
+    const badRhythm = await (await post(base, `${groupPath}/rhythm`, await cookieFor(db, grace), 'interval=weekly')).text()
+    assert.deepEqual(open(badRhythm), ['rhythm'])
+    assert.match(setupStep(badRhythm, 'rhythm')?.html ?? '', /class="form-error" role="alert"/)
+  } finally {
+    await closeServer(server)
     await closeDatabase(db)
   }
 })

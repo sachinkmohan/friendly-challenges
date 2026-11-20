@@ -26,7 +26,6 @@ import {
   type RhythmInput,
   type RhythmLine,
   type StakesGo,
-  type StartKind,
   type StartStep,
 } from './challenge.ts'
 import { CURRENCY_CODES } from './currencies.ts'
@@ -304,11 +303,12 @@ const frame = (screens: string, head: PageHead, toast: string | null = null) => 
     .cell.blank { background: #efe8dc; }
     .grid-note { margin-top: 8px; }
     .field-hint { font-size: 14px; line-height: 1.4; }
-    .start-steps { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
-    .start-steps li { display: flex; gap: 8px; color: #1c1915; }
-    .start-steps .mark { flex: none; width: 20px; font-weight: 650; color: #8a8378; }
-    .start-steps li[data-done="true"] { color: #5c564c; }
-    .start-steps li[data-done="true"] .mark { color: #2f7d4a; }
+    .steps { margin-top: 8px; }
+    .step-head { display: flex; gap: 10px; align-items: flex-start; }
+    .step .mark { flex: none; width: 20px; font-weight: 650; color: #8a8378; }
+    .step[data-done="true"] .mark { color: #2f7d4a; }
+    #start { margin-top: 8px; }
+    #start + details.fold { margin-top: 16px; }
     #start { scroll-margin-top: 72px; }
     #start .field-hint { margin-top: 8px; }
     .start-error, .form-error { margin-top: 8px; color: #b3392f; font-weight: 650; }
@@ -1092,15 +1092,6 @@ function typeLabel(type: ChallengeType): string {
   return type.kind === 'custom' ? type.label : PRESET_LABELS[type.preset]
 }
 
-function startStepText(step: StartStep, cap: number, missing: readonly string[], start: StartKind | null): string {
-  if (step === 'terms_saved') return 'Save the challenge name, type, stake, and dates.'
-  if (step === 'rhythms_picked') {
-    return missing.length === 0 ? 'Everyone picked a rhythm.' : `Everyone picked a rhythm. Waiting on ${missing.join(', ')}.`
-  }
-  if (start === 'solo') return 'Just you, as a solo challenge.'
-  return `2 to ${cap} people are active.`
-}
-
 function failureParagraph(attempt?: ChallengeAttempt): string {
   if (attempt?.failure) return `<p>${escapeHtml(challengeFailureCopy[attempt.failure])}</p>`
   if (attempt?.checkInFailure) return `<p>${escapeHtml(checkInFailureCopy[attempt.checkInFailure])}</p>`
@@ -1282,28 +1273,6 @@ export function renderNewChallenge(viewer: Viewer, form: NewChallengeForm = { ki
 
 type ActiveChallenge = Extract<MemberChallengeCard, { phase: 'active' }>
 type SetupChallenge = Exclude<MemberChallengeCard, { phase: 'active' }>
-
-function rhythmForm(groupId: GroupId, interval: string, prompt: string): string {
-  const action = escapeHtml(`${groupHref(groupId)}/rhythm`)
-  const title = prompt ? `<p class="section-title">${escapeHtml(prompt)}</p>` : ''
-  return `<form method="post" action="${action}">
-      ${title}
-      <label for="rhythm-interval">How often you log</label>
-      <select id="rhythm-interval" name="interval">${intervalOptions(interval)}</select>
-      <button type="submit">Save rhythm</button>
-    </form>`
-}
-
-function rhythmControl(
-  groupId: GroupId,
-  challenge: SetupChallenge,
-  userId: string,
-  posted: RhythmInput | undefined,
-): string {
-  if (challenge.phase === 'unopened') return ''
-  const stored = challenge.rhythms.find((line) => line.userId === userId)
-  return rhythmForm(groupId, posted?.interval ?? stored?.kind ?? '', stored ? '' : 'Pick your rhythm')
-}
 
 function checkInControl(groupId: GroupId, challenge: ActiveChallenge, postedDay: string | undefined): string {
   const action = escapeHtml(`${groupHref(groupId)}${checkInSuffix}`)
@@ -1523,74 +1492,10 @@ function dropNameForm(view: MembersView, challenge: MemberChallengeCard, userId:
     </form>`
 }
 
-function startForm(groupId: GroupId): string {
-  const action = escapeHtml(`${groupHref(groupId)}${challengeStartSuffix}#start`)
-  return `<form method="post" action="${action}"><button type="submit">Start challenge</button></form>`
-}
-
-function startStepItem(step: StartStep, done: boolean, cap: number, missing: readonly string[], start: StartKind | null): string {
-  const mark = done ? '✓' : '○'
-  const state = done ? 'Done.' : 'Not done yet.'
-  return `<li data-done="${done}"><span class="mark" aria-hidden="true">${mark}</span><span>${escapeHtml(startStepText(step, cap, missing, start))} <span class="sr-only">${state}</span></span></li>`
-}
-
-function startSection(
-  groupId: GroupId,
-  challenge: SetupChallenge,
-  creator: Creator,
-  missing: readonly string[],
-  failure: ChallengeFailure | undefined,
-): string {
-  const start = challenge.phase === 'draft' ? challenge.start : null
-  const steps = challenge.checks.map((check) => startStepItem(check.step, check.done, challenge.cap, missing, start)).join('')
-  const ready = challenge.phase === 'draft' && challenge.checks.every((check) => check.done)
-  const alert = failure ? `<p class="start-error" role="alert">${escapeHtml(challengeFailureCopy[failure])}</p>` : ''
-  const control = !creator.isViewer
-    ? `<p class="field-hint">Waiting for ${escapeHtml(creator.name)} to start.</p>`
-    : ready
-      ? startForm(groupId)
-      : '<p class="field-hint">Start challenge appears here once every step above is done.</p>'
-  return `<div id="start" role="group" aria-labelledby="start-title">
-      <p class="section-title" id="start-title">Before you start</p>
-      <ul class="start-steps">${steps}</ul>
-      ${alert}
-      ${control}
-    </div>`
-}
-
 function missingNames(members: readonly MemberLine[], missing: readonly string[]): readonly string[] {
   return members.filter((member) => missing.includes(member.userId)).map((member) => member.displayName)
 }
 
-type Creator = { readonly isViewer: boolean; readonly name: string }
-
-function termsBlock(
-  groupId: GroupId,
-  challenge: SetupChallenge,
-  creator: Creator,
-  draft: ChallengeInput | undefined,
-): string {
-  if (creator.isViewer) {
-    const values = draft
-      ? termsFromDraft(draft)
-      : challenge.phase === 'draft'
-        ? termsFromStored(challenge.terms, challenge.minorDigits)
-        : emptyTerms
-    const solo = challenge.phase === 'draft' ? stakesGoText(challenge.stakesGo) : ''
-    return `${solo}${termsForm(groupId, challenge.currencies, values)}`
-  }
-  if (challenge.phase === 'unopened') return `<p>Waiting for ${escapeHtml(creator.name)} to set the terms.</p>`
-  const stakesGo = challenge.stakesGo
-  const setBy = creator.isViewer ? '' : `<p class="field-hint">Set by ${escapeHtml(creator.name)}.</p>`
-  return `${termsText(challenge.terms, challenge.minorDigits, stakesGo)}${setBy}`
-}
-
-function memberItem(member: MemberLine, rhythms: readonly RhythmLine[]): string {
-  const when = escapeHtml(member.joinedOn)
-  const rhythm = rhythms.find((line) => line.userId === member.userId)
-  const logged = rhythm ? `<span class="rhythm">${escapeHtml(RHYTHM_LABELS[rhythm.kind])}</span>` : ''
-  return `<li>${portrait(member)} <span class="member-name">${escapeHtml(member.displayName)} <time datetime="${when}">${when}</time></span>${logged}</li>`
-}
 
 function joinControl(groupId: GroupId, viewer: Viewer): string {
   if (viewer.state === 'signed_out') return signInControl(viewer, groupHref(groupId))
@@ -1616,7 +1521,7 @@ function friendlySpan(startsOn: string, endsOn: string): string {
   return `${friendlyDate(startsOn, years)} – ${friendlyDate(endsOn, years)}`
 }
 
-function termsLine(challenge: ActiveChallenge, activeCount: number): string {
+function termsLine(challenge: ActiveChallenge | Extract<SetupChallenge, { phase: 'draft' }>, activeCount: number): string {
   const { terms, stakesGo } = challenge
   const parts = [
     `${formatStake(terms.stakeMinor, challenge.minorDigits)} ${terms.currency} per missed day`,
@@ -1706,8 +1611,8 @@ function historyBody(checkIns: readonly CheckIn[]): string {
   return `<ul class="check-ins">${checkIns.map(checkInItem).join('')}</ul>`
 }
 
-function inviteControl(view: MemberView, link: string): string {
-  if (view.ledger?.kind === 'solo' || view.activeCount >= ACTIVE_MEMBER_CAP) return ''
+function inviteControl(view: MemberView, link: string, solo: boolean): string {
+  if (solo || view.activeCount >= ACTIVE_MEMBER_CAP) return ''
   return `<div class="invite">
         <button type="button" class="secondary invite-button" data-title="${escapeHtml(view.label)}" hidden>Invite a friend</button>
         <p class="field-hint invite-hint">Copy this link and send it to a friend.</p>
@@ -1723,15 +1628,11 @@ function moneyTitle(ledger: Ledger | null, userId: string): string {
 function startedPage(view: MemberView, challenge: ActiveChallenge, viewer: Viewer, origin: string, attempt: ChallengeAttempt | undefined, toast: string | null): string {
   const userId = viewer.state === 'signed_in' ? viewer.account.id : ''
   const payment = attempt?.paymentFailure
-  const dropout = attempt?.dropoutFailure
-  const deletion = attempt?.deleteFailure
-  const dropName = attempt?.dropNameFailure
   const paymentError = formError(payment && paymentFailureCopy[payment])
   const money = view.ledger ? balancesSection(view.groupId, view.ledger, userId, attempt?.paymentDraft, paymentError) : paymentError
   const members = `<ul class="members">${view.members.map((member) => memberRow(member, challenge.rhythms)).join('')}</ul>
-      ${inviteControl(view, `${origin}${groupHref(view.groupId)}`)}`
-  const manage = `${manageActions(view, userId, { dropout, dropoutDraft: attempt?.dropoutDraft, deletion })}
-      ${dropNameForm(view, challenge, userId, formError(dropName && dropNameFailureCopy[dropName]))}`
+      ${inviteControl(view, `${origin}${groupHref(view.groupId)}`, view.ledger?.kind === 'solo')}`
+
   return groupCard(view.label, `
     ${termsLine(challenge, view.activeCount)}
     ${todaySection(view, challenge, userId, attempt)}
@@ -1739,7 +1640,134 @@ function startedPage(view: MemberView, challenge: ActiveChallenge, viewer: Viewe
     ${fold('money', moneyTitle(view.ledger, userId), money, payment !== undefined)}
     ${fold('members', 'Members', members, false)}
     ${fold('history', 'History', historyBody(view.checkIns), false)}
-    ${fold('manage', 'Manage', manage, dropout !== undefined || deletion !== undefined || dropName !== undefined)}
+    ${manageFold(view, challenge, userId, attempt)}
+  `, toast)
+}
+
+function manageFold(view: MemberView, challenge: MemberChallengeCard, userId: string, attempt: ChallengeAttempt | undefined): string {
+  const dropout = attempt?.dropoutFailure
+  const deletion = attempt?.deleteFailure
+  const dropName = attempt?.dropNameFailure
+  const body = `${manageActions(view, userId, { dropout, dropoutDraft: attempt?.dropoutDraft, deletion })}
+      ${dropNameForm(view, challenge, userId, formError(dropName && dropNameFailureCopy[dropName]))}`
+  return fold('manage', 'Manage', body, dropout !== undefined || deletion !== undefined || dropName !== undefined)
+}
+
+type SetupStepId = 'terms' | 'rhythm' | 'invite' | 'everyone'
+
+type SetupStep = {
+  readonly id: SetupStepId
+  readonly title: string
+  readonly done: boolean
+  readonly note: string
+  readonly body: string
+  /** The viewer can finish this step themselves, so it may open as their next one. */
+  readonly yours: boolean
+}
+
+function stepRow(step: SetupStep, open: boolean): string {
+  const mark = step.done ? '✓' : '○'
+  const state = step.done ? 'Done.' : 'Not done yet.'
+  return `<details class="fold step" id="step-${step.id}" data-done="${step.done}"${open ? ' open' : ''}>
+      <summary><span class="step-head"><span class="mark" aria-hidden="true">${mark}</span><span class="fold-title">${escapeHtml(step.title)}<span class="fold-note">${escapeHtml(step.note)}</span></span></span><span class="sr-only">${state}</span></summary>
+      <div class="fold-body">${step.body}</div>
+    </details>`
+}
+
+function rhythmForm(groupId: GroupId, interval: string, error: string): string {
+  const action = escapeHtml(`${groupHref(groupId)}/rhythm`)
+  return `<form method="post" action="${action}">
+      ${error}
+      <label for="rhythm-interval">How often you log</label>
+      <select id="rhythm-interval" name="interval">${intervalOptions(interval)}</select>
+      <button type="submit">Save rhythm</button>
+    </form>`
+}
+
+function setupSteps(view: MemberView, challenge: SetupChallenge, userId: string, origin: string, attempt: ChallengeAttempt | undefined): readonly SetupStep[] {
+  const creator = view.members.find((member) => member.userId === view.creatorId)?.displayName ?? 'the creator'
+  const isCreator = userId === view.creatorId
+  const draft = challenge.phase === 'draft' ? challenge : null
+  const checked = (step: StartStep) => challenge.checks.find((check) => check.step === step)?.done ?? false
+  const termsError = attempt?.draft ? formError(attempt.failure && challengeFailureCopy[attempt.failure]) : ''
+  const rhythmError = attempt?.rhythmDraft ? formError(attempt.failure && challengeFailureCopy[attempt.failure]) : ''
+
+  const termsValues = attempt?.draft ? termsFromDraft(attempt.draft) : draft ? termsFromStored(draft.terms, draft.minorDigits) : emptyTerms
+  const termsBody = isCreator
+    ? `${draft ? stakesGoText(draft.stakesGo) : ''}${termsError}${termsForm(view.groupId, challenge.currencies, termsValues)}`
+    : draft
+      ? `${termsError}${termsText(draft.terms, draft.minorDigits, draft.stakesGo)}<p class="field-hint">Set by ${escapeHtml(creator)}.</p>`
+      : `${termsError}<p>Waiting for ${escapeHtml(creator)} to set the terms.</p>`
+  const terms: SetupStep = {
+    id: 'terms',
+    title: 'The terms',
+    done: draft !== null,
+    note: draft
+      ? `${formatStake(draft.terms.stakeMinor, draft.minorDigits)} ${draft.terms.currency} per missed day · ${friendlySpan(draft.terms.startsOn, draft.terms.endsOn)}`
+      : isCreator ? 'Name, stake, and dates' : `Waiting for ${creator}`,
+    body: termsBody,
+    yours: isCreator,
+  }
+
+  const mine = draft?.rhythms.find((line) => line.userId === userId)
+  const rhythm: SetupStep = {
+    id: 'rhythm',
+    title: 'Your rhythm',
+    done: mine !== undefined,
+    note: mine ? RHYTHM_LABELS[mine.kind] : 'Not picked yet',
+    body: draft
+      ? rhythmForm(view.groupId, attempt?.rhythmDraft?.interval ?? mine?.kind ?? '', rhythmError)
+      : `${rhythmError}<p>Pick how often you log once the terms are saved.</p>`,
+    yours: draft !== null,
+  }
+
+  const solo = draft?.start === 'solo'
+  const invite: SetupStep = {
+    id: 'invite',
+    title: 'Invite friends',
+    done: checked('headcount'),
+    note: `${view.activeCount} of 2 to ${challenge.cap} active`,
+    body: inviteControl(view, `${origin}${groupHref(view.groupId)}`, false) || '<p>This challenge is full.</p>',
+    yours: true,
+  }
+
+  const missing = missingNames(view.members, challenge.missingRhythms)
+  const rhythms = draft?.rhythms ?? []
+  const everyone: SetupStep = {
+    id: 'everyone',
+    title: 'Everyone picked a rhythm',
+    done: checked('rhythms_picked'),
+    note: missing.length === 0 ? 'Done' : `Waiting on ${missing.join(', ')}`,
+    body: `<ul class="members">${view.members.map((member) => memberRow(member, rhythms)).join('')}</ul>`,
+    yours: false,
+  }
+  return solo ? [terms, rhythm, everyone] : [terms, rhythm, invite, everyone]
+}
+
+function startControl(groupId: GroupId, ready: boolean, isCreator: boolean, creator: string, failure: ChallengeFailure | undefined): string {
+  const alert = failure ? `<p class="start-error" role="alert">${escapeHtml(challengeFailureCopy[failure])}</p>` : ''
+  const action = escapeHtml(`${groupHref(groupId)}${challengeStartSuffix}#start`)
+  const control = !isCreator
+    ? `<p class="field-hint">Waiting for ${escapeHtml(creator)} to start.</p>`
+    : `<form method="post" action="${action}"><button type="submit"${ready ? '' : ' disabled'}>Start challenge</button></form>
+      ${ready ? '' : '<p class="field-hint">Start challenge works once every step above is done.</p>'}`
+  return `<div id="start">${alert}${control}</div>`
+}
+
+function setupPage(view: MemberView, challenge: SetupChallenge, viewer: Viewer, origin: string, attempt: ChallengeAttempt | undefined, toast: string | null): string {
+  const userId = viewer.state === 'signed_in' ? viewer.account.id : ''
+  const creator = view.members.find((member) => member.userId === view.creatorId)?.displayName ?? 'the creator'
+  const steps = setupSteps(view, challenge, userId, origin, attempt)
+  const failed: SetupStepId | null = attempt?.draft ? 'terms' : attempt?.rhythmDraft ? 'rhythm' : null
+  const openId = failed ?? (attempt?.startFailure || attempt?.dropoutFailure || attempt?.deleteFailure || attempt?.dropNameFailure ? null : steps.find((step) => !step.done && step.yours)?.id ?? null)
+  const ready = challenge.phase === 'draft' && challenge.checks.every((check) => check.done)
+  const headline = challenge.phase === 'draft' ? termsLine(challenge, view.activeCount) : `<p class="terms-line">${escapeHtml(activeCountText(view.activeCount))}</p>`
+  return groupCard(view.label, `
+    ${headline}
+    <p class="section-title">Before you start</p>
+    <div class="steps">${steps.map((step) => stepRow(step, step.id === openId)).join('')}</div>
+    ${startControl(view.groupId, ready, userId === view.creatorId, creator, attempt?.startFailure)}
+    ${manageFold(view, challenge, userId, attempt)}
   `, toast)
 }
 
@@ -1767,25 +1795,7 @@ export function renderGroup(
   }
   const challenge = view.challenge
   if (challenge.phase === 'active') return startedPage(view, challenge, viewer, origin, attempt, toast)
-  const userId = viewer.state === 'signed_in' ? viewer.account.id : ''
-  const creatorName = view.members.find((member) => member.userId === view.creatorId)?.displayName ?? 'the creator'
-  const creator = { isViewer: userId === view.creatorId, name: creatorName }
-  const terms = termsBlock(view.groupId, challenge, creator, attempt?.draft)
-  const start = startSection(view.groupId, challenge, creator, missingNames(view.members, challenge.missingRhythms), attempt?.startFailure)
-  const rhythm = rhythmControl(view.groupId, challenge, userId, attempt?.rhythmDraft)
-  const rhythms = challenge.phase === 'unopened' ? [] : challenge.rhythms
-  const share = escapeHtml(`${origin}${groupHref(view.groupId)}`)
-  return groupCard(view.label, `
-    ${count}
-    ${dropNameForm(view, challenge, userId)}
-    ${failure}
-    ${terms}
-    ${rhythm}
-    ${start}
-    <ul class="members">${view.members.map((member) => memberItem(member, rhythms)).join('')}</ul>
-    ${manageActions(view, userId, {})}
-    <p class="share">Share this link to invite someone. <a href="${share}">${share}</a></p>
-  `, toast)
+  return setupPage(view, challenge, viewer, origin, attempt, toast)
 }
 
 export type BadgePage =

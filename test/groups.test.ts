@@ -8,7 +8,7 @@ import { createSession } from '../src/sessions.ts'
 import { saveChallenge, saveRhythm, startChallenge } from '../src/challenge.ts'
 import { dropGroupName, joinGroup, parseGroupId } from '../src/groups.ts'
 import { closeServer, cookieFor, createForm, fakeVerifier, fixtureTerms, googleToken, groupWith, legacyGroupWith, listen, person } from './support/fixtures.ts'
-import { viewGroup } from './support/reads.ts'
+import { setupStep, viewGroup } from './support/reads.ts'
 
 type Person = { cookie: string; userId: string }
 
@@ -86,16 +86,13 @@ test('the creator is the first member and a second person can join', async () =>
     assert.match(rosterHtml, /Morning run/)
     assert.match(rosterHtml, /1 active/)
     assert.match(rosterHtml, /Ada/)
-    assert.match(rosterHtml, /https:\/\/lh3.googleusercontent.com\/a\/ada/)
-    assert.match(rosterHtml, /<time datetime="\d{4}-\d{2}-\d{2}">/)
     assert.match(rosterHtml, /Before you start/)
-    assert.match(rosterHtml, /<li data-done="true">[^]*?Save the challenge name, type, stake, and dates\. <span class="sr-only">Done\.<\/span>/)
-    assert.match(rosterHtml, /<li data-done="true">[^]*?Everyone picked a rhythm\./)
+    assert.equal(setupStep(rosterHtml, 'terms')?.done, true)
+    assert.equal(setupStep(rosterHtml, 'everyone')?.done, true)
     assert.match(rosterHtml, /<span class="rhythm">Every day<\/span>/)
-    assert.match(rosterHtml, /<li data-done="false">[^]*?2 to 5 people are active\. <span class="sr-only">Not done yet\.<\/span>/)
-    assert.match(rosterHtml, /Start challenge appears here once every step above is done\./)
-    assert.doesNotMatch(rosterHtml, /challenge\/start/)
-    assert.match(rosterHtml, new RegExp(`${base}${groupPath}`))
+    assert.deepEqual([setupStep(rosterHtml, 'invite')?.done, setupStep(rosterHtml, 'invite')?.open], [false, true])
+    assert.match(rosterHtml, /<button type="submit" disabled>Start challenge<\/button>/)
+    assert.match(rosterHtml, new RegExp(`<input class="invite-link" type="text" readonly value="${base}${groupPath}"`))
     assert.doesNotMatch(rosterHtml, /left_on/)
 
     const peeked = await fetch(`${base}${groupPath}`, { headers: { cookie: grace.cookie } })
