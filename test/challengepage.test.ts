@@ -62,8 +62,13 @@ function serverDay(html: string): string {
   return next === -1 ? block : block.slice(0, next)
 }
 
+// Up to the next folded row, so the rows nested inside a fold stay in it.
 function fold(html: string, id: string): string {
-  return between(html, `<details class="fold" id="${id}"`, '</details>\n')
+  const start = `<details class="fold" id="${id}"`
+  const from = html.indexOf(start)
+  assert.ok(from >= 0, `${start} is on the page`)
+  const next = html.indexOf('<details class="fold"', from + start.length)
+  return html.slice(from, next === -1 ? html.indexOf('</article>', from) : next)
 }
 
 test('a started challenge reads top to bottom: terms line, today, calendar, then four closed rows', async () => {
@@ -161,7 +166,6 @@ test('Members lists each badge and rhythm, and History lists the check-ins', asy
     const members = fold(html, 'members')
     assert.match(members, new RegExp(`<li data-member="${ada.id}"><span class="avatar badge-initials" aria-hidden="true">AD</span> <span class="member-name">Ada</span><span class="rhythm">Every day</span></li>`))
     assert.match(members, new RegExp(`<li data-member="${grace.id}">[^]*?<span class="rhythm">Every 2 days</span>`))
-    assert.match(members, /Share this link to invite someone\./)
     assert.match(fold(html, 'history'), /Ada <time datetime="2026-11-02">2026-11-02<\/time><\/span> <span>Green<\/span>/)
   })
 })
@@ -180,4 +184,71 @@ test('someone who joins after the start picks a rhythm where the log buttons wou
     const shown = between(await refused.text(), '<section class="today-area">', '</section>')
     assert.match(shown, /class="form-error" role="alert"/, 'a refused log still says why')
   })
+})
+
+test('the folded Money row reads your own position, and Record a payment opens its form', async () => {
+  await withCrew(async ({ ada, grace, page, send }) => {
+    const note = (html: string) => /<span class="fold-note">([^<]+)<\/span>/.exec(fold(html, 'money'))?.[1]
+    const adaHtml = await page(ada)
+    assert.equal(note(adaHtml), 'You owe Grace 5.00 USD')
+    assert.equal(note(await page(grace)), 'You are owed 5.00 USD')
+    const money = fold(adaHtml, 'money')
+    assert.match(money, /Ada owes Grace 5\.00 USD/)
+    assert.match(money, /<details class="action record-payment"><summary>Record a payment<\/summary><form /, 'the payment form waits behind its button')
+    assert.match(money, /<details class="action"><summary>All balances<\/summary><ul class="check-ins balances">/)
+
+    const refused = await (await send(ada, '/payment', { payee: grace.id, amount: '0', paid_on: '2026-11-03', paypal_ref: 'pp-1' })).text()
+    assert.match(fold(refused, 'money'), /<details class="action record-payment" open><summary>Record a payment<\/summary>[^]*name="paypal_ref" value="pp-1"/)
+
+    assert.equal((await send(ada, '/payment', { payee: grace.id, amount: '5', paid_on: '2026-11-03', paypal_ref: '' })).status, 303)
+    const paid = await page(ada)
+    assert.equal(note(paid), 'You are even')
+    assert.match(fold(paid, 'money'), /<details class="action"><summary>Payments<\/summary>[^]*Ada paid Grace 5\.00 USD/)
+  })
+})
+
+test('Manage keeps every red button folded, and a member who is not the creator only sees Leave', async () => {
+  await withCrew(async ({ ada, grace, page }) => {
+    const titles = (html: string) => [...fold(html, 'manage').matchAll(/<details class="action"><summary>([^<]+)<\/summary>/g)].map((m) => m[1])
+    const adaHtml = await page(ada)
+    assert.deepEqual(titles(adaHtml), ['Leave this challenge', 'Record a dropout', 'Delete challenge'])
+    assert.deepEqual(titles(await page(grace)), ['Leave this challenge'])
+    const danger = adaHtml.indexOf('class="danger"')
+    assert.ok(danger > adaHtml.indexOf('<details class="action"><summary>Delete challenge</summary>'), 'the red button sits inside the closed Delete challenge row')
+    assert.match(fold(adaHtml, 'manage'), /<label class="confirm"><input type="checkbox" name="confirm" value="yes" required> Delete it for everyone<\/label>/)
+  })
+})
+
+test('Invite a friend sits in Members with the link to copy by hand, and is gone once the challenge is full', async () => {
+  await withCrew(async ({ db, ada, groupId, base, page }) => {
+    const link = `${base}/groups/${groupId}`
+    const members = fold(await page(ada), 'members')
+    assert.match(members, /<button type="button" class="secondary invite-button" data-title="No sweets" hidden>Invite a friend<\/button>/)
+    assert.match(members, new RegExp(`<input class="invite-link" type="text" readonly value="${link}"`))
+    assert.doesNotMatch(await page(ada), /class="share"/, 'the raw link is gone from the bottom of the page')
+
+    for (const name of ['Lin', 'Noor', 'Omar']) {
+      const joined = await joinGroup(db, await person(db, name), groupId)
+      if (!joined.ok) throw new Error(joined.failure)
+    }
+    assert.doesNotMatch(fold(await page(ada), 'members'), /<div class="invite">/)
+  })
+})
+
+test('a solo challenge has no Invite a friend, and its Money row reads what you owe the cause', async () => {
+  const db = openTestDatabase()
+  const ada = await person(db, 'Ada')
+  const groupId = await groupWith(db, [ada], 'Run', { cause: 'Food bank' })
+  await setJoinedOn(db, groupId, '2026-11-01')
+  const started = await startChallenge(db, ada, groupId)
+  if (!started.ok) throw new Error(started.failure)
+  const { server, base } = await listen(db, { today: () => today })
+  try {
+    const html = await (await fetch(`${base}/groups/${groupId}`, { headers: { cookie: await cookieFor(db, ada) } })).text()
+    assert.match(fold(html, 'money'), /<span class="fold-note">You owe Food bank 15\.00 USD<\/span>/)
+    assert.doesNotMatch(fold(html, 'members'), /<div class="invite">/)
+  } finally {
+    await closeServer(server)
+    await closeDatabase(db)
+  }
 })

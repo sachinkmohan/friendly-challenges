@@ -211,17 +211,24 @@ test('the group card records a dropout and the leaver keeps a calendar row with 
   const groupPath = `/groups/${groupId}`
   const dropoutPath = `${groupPath}/dropout`
   const page = async (cookie: string) => (await fetch(`${base}${groupPath}`, { headers: { cookie } })).text()
-  const dropoutForm = (html: string) => {
-    const start = html.indexOf(`action="${dropoutPath}"`)
-    return start < 0 ? '' : html.slice(start, html.indexOf('</form>', start))
+  const dropoutForms = (html: string) => {
+    const forms: string[] = []
+    for (let at = html.indexOf(`action="${dropoutPath}"`); at >= 0; at = html.indexOf(`action="${dropoutPath}"`, at + 1)) {
+      forms.push(html.slice(at, html.indexOf('</form>', at)))
+    }
+    return forms
   }
+  const recordForm = (html: string) => dropoutForms(html).find((form) => form.includes('Record dropout')) ?? ''
   try {
-    const adaForm = dropoutForm(await page(adaCookie))
-    for (const who of [ada, grace, lin]) assert.match(adaForm, new RegExp(`<option value="${who.id}"`))
-    const graceForm = dropoutForm(await page(graceCookie))
-    assert.match(graceForm, new RegExp(`<option value="${grace.id}"`))
-    assert.doesNotMatch(graceForm, new RegExp(`<option value="${lin.id}"`))
-    assert.doesNotMatch(graceForm, new RegExp(`<option value="${ada.id}"`))
+    const adaHtml = await page(adaCookie)
+    const [adaLeave, adaRecord] = dropoutForms(adaHtml)
+    assert.match(adaLeave ?? '', new RegExp(`<input type="hidden" name="member" value="${ada.id}">[^]*Leave challenge`))
+    for (const who of [grace, lin]) assert.match(adaRecord ?? '', new RegExp(`<option value="${who.id}"`))
+    assert.doesNotMatch(adaRecord ?? '', new RegExp(`<option value="${ada.id}"`), 'the creator leaves through Leave this challenge')
+    const graceForms = dropoutForms(await page(graceCookie))
+    assert.equal(graceForms.length, 1, 'a member who is not the creator only has Leave this challenge')
+    assert.match(graceForms[0]!, new RegExp(`<input type="hidden" name="member" value="${grace.id}">`))
+    assert.doesNotMatch(graceForms[0]!, /<select/)
 
     const looked = await fetch(`${base}${dropoutPath}`, { headers: { cookie: adaCookie } })
     assert.equal(looked.status, 405)
@@ -240,7 +247,8 @@ test('the group card records a dropout and the leaver keeps a calendar row with 
     const futureHtml = await future.text()
     assert.match(futureHtml, /Pick a last day that is today or earlier\./)
     assert.match(futureHtml, /name="last_day" type="date" value="2026-11-07"/)
-    assert.match(dropoutForm(futureHtml), new RegExp(`<option value="${grace.id}" selected>`))
+    assert.match(recordForm(futureHtml), new RegExp(`<option value="${grace.id}" selected>`))
+    assert.match(futureHtml, /<details class="action" open><summary>Record a dropout<\/summary>/)
     assert.deepEqual(await leftOn(db, groupId), { [ada.id]: null, [grace.id]: null, [lin.id]: null })
 
     const self = await post(base, dropoutPath, linCookie, fields({ member: lin.id, last_day: '2026-11-03' }))
