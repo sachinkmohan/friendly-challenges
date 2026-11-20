@@ -42,3 +42,20 @@ export async function readLedger(db: Database, groupId: GroupId, today: IsoDate)
   const users = await readUsers(db, [...Object.keys(group.members), ...paymentUserIds(payments)])
   return ledgerFrom(group, { checkIns, payments }, users, today)
 }
+
+export type SetupStepRead = { readonly done: boolean; readonly open: boolean; readonly note: string; readonly html: string }
+
+/** One row of the checklist a challenge shows before it starts, or null when the page has no such row. */
+export function setupStep(html: string, id: 'terms' | 'rhythm' | 'invite' | 'everyone'): SetupStepRead | null {
+  const from = html.indexOf(`<details class="fold step" id="step-${id}"`)
+  if (from < 0) return null
+  const ends = [html.indexOf('<details class="fold', from + 1), html.indexOf('<div id="start">', from)].filter((at) => at > 0)
+  const row = html.slice(from, Math.min(...ends))
+  const head = row.slice(0, row.indexOf('>') + 1)
+  return {
+    done: head.includes('data-done="true"'),
+    open: head.endsWith(' open>'),
+    note: /<span class="fold-note">([^<]*)<\/span>/.exec(row)?.[1] ?? '',
+    html: row,
+  }
+}
